@@ -8,7 +8,7 @@ Vole focuses on safe cleanup first: default rules are conservative, browser cach
 
 - TUI + CLI parity: run `vole` for the interface or use `vole clean` flags.
 - Safe defaults: user-only cleanup by default, with optional sudo mode.
-- Dry-run toggle: preview without deleting via `--dry-run` or the TUI.
+- Dry-run toggle: preview without deleting via `--dry-run` or the TUI (lists files and dirs).
 - Distro-aware rules: Arch first-class, then Fedora, then Ubuntu/Debian.
 - Snapshot gating: snapshot option only appears if a supported provider is detected.
 

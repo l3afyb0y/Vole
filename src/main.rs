@@ -116,7 +116,7 @@ fn run_clean_cli(
         bail!("--sudo requires running as root (try: sudo vole clean --sudo)");
     }
 
-    if args.snapshot && !is_root {
+    if args.snapshot && !is_root && !args.effective_dry_run() {
         bail!("--snapshot requires root (try: sudo vole clean --sudo --snapshot)");
     }
 
@@ -129,7 +129,18 @@ fn run_clean_cli(
     print_plan(&scans);
 
     if args.effective_dry_run() {
-        println!("Dry-run complete.");
+        let report = clean::dry_run(&scans);
+        println!(
+            "Dry-run listed {} files and {} directories",
+            report.files_listed, report.dirs_listed
+        );
+        println!("Would free {}", format_size(report.bytes_listed, BINARY));
+        if args.snapshot {
+            println!("Snapshot skipped in dry-run.");
+        }
+        if report.errors > 0 {
+            println!("Errors encountered: {}", report.errors);
+        }
         return Ok(());
     }
 
@@ -217,13 +228,30 @@ fn handle_tui(exit: tui::TuiExit) -> Result<()> {
     match exit {
         tui::TuiExit::Quit => Ok(()),
         tui::TuiExit::ReexecSudo { args } => reexec_with_sudo(&args),
-        tui::TuiExit::Apply { rules, snapshot } => {
+        tui::TuiExit::Apply {
+            rules,
+            snapshot,
+            dry_run,
+        } => {
+            let scans = rules.iter().map(clean::scan_rule).collect::<Vec<_>>();
+            if dry_run {
+                let report = clean::dry_run(&scans);
+                println!(
+                    "Dry-run listed {} files and {} directories",
+                    report.files_listed, report.dirs_listed
+                );
+                println!("Would free {}", format_size(report.bytes_listed, BINARY));
+                if report.errors > 0 {
+                    println!("Errors encountered: {}", report.errors);
+                }
+                return Ok(());
+            }
+
             if let Some(support) = snapshot {
                 let outcome = snapshot::create_snapshot(&support)?;
                 println!("{}", outcome.display());
             }
 
-            let scans = rules.iter().map(clean::scan_rule).collect::<Vec<_>>();
             let report = clean::apply(&scans);
             println!(
                 "Removed {} files and {} directories",

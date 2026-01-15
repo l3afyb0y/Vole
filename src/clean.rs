@@ -25,6 +25,14 @@ pub struct CleanReport {
     pub errors: usize,
 }
 
+#[derive(Debug, Default)]
+pub struct DryRunReport {
+    pub files_listed: usize,
+    pub dirs_listed: usize,
+    pub bytes_listed: u64,
+    pub errors: usize,
+}
+
 pub fn scan_rules(rules: &[Rule]) -> Vec<RuleScan> {
     rules.iter().map(scan_rule).collect()
 }
@@ -66,6 +74,32 @@ pub fn apply(scans: &[RuleScan]) -> CleanReport {
                 }
             }
         }
+    }
+
+    report
+}
+
+pub fn dry_run(scans: &[RuleScan]) -> DryRunReport {
+    let mut report = DryRunReport::default();
+
+    println!("Dry-run details (no files will be deleted):");
+    println!("Note: directories are only removed if empty after file removal.");
+    for scan in scans {
+        println!("Rule: {} ({})", scan.rule.label, scan.rule.id);
+        if scan.files.is_empty() && scan.dirs.is_empty() {
+            println!("  (no entries)");
+        } else {
+            for path in &scan.files {
+                println!("  file: {}", path.display());
+            }
+            for path in &scan.dirs {
+                println!("  dir: {}", path.display());
+            }
+        }
+        report.files_listed += scan.files.len();
+        report.dirs_listed += scan.dirs.len();
+        report.bytes_listed += scan.bytes;
+        report.errors += scan.errors;
     }
 
     report

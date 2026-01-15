@@ -70,6 +70,7 @@ pub enum TuiExit {
     Apply {
         rules: Vec<Rule>,
         snapshot: Option<SnapshotSupport>,
+        dry_run: bool,
     },
     ReexecSudo {
         args: Vec<String>,
@@ -256,11 +257,23 @@ impl AppState {
         if self.snapshot_support.is_none() {
             return;
         }
+        if self.dry_run {
+            self.message = Some("Disable dry-run to use snapshots".to_string());
+            return;
+        }
         if !self.include_sudo {
             self.message = Some("Enable sudo to use snapshots".to_string());
             return;
         }
         self.snapshot_enabled = !self.snapshot_enabled;
+    }
+
+    fn toggle_dry_run(&mut self) {
+        self.dry_run = !self.dry_run;
+        if self.dry_run && self.snapshot_enabled {
+            self.snapshot_enabled = false;
+            self.message = Some("Dry-run enabled: snapshot disabled".to_string());
+        }
     }
 
     fn total_selected(&self) -> (u64, usize) {
@@ -400,7 +413,11 @@ fn handle_key(app: &mut AppState, key: KeyEvent) -> Result<Option<TuiExit>> {
                         } else {
                             None
                         };
-                        return Ok(Some(TuiExit::Apply { rules, snapshot }));
+                        return Ok(Some(TuiExit::Apply {
+                            rules,
+                            snapshot,
+                            dry_run: app.dry_run,
+                        }));
                     }
                     app.message = Some("Type DELETE to confirm".to_string());
                     app.confirm_buffer.clear();
@@ -424,7 +441,11 @@ fn handle_key(app: &mut AppState, key: KeyEvent) -> Result<Option<TuiExit>> {
                     } else {
                         None
                     };
-                    return Ok(Some(TuiExit::Apply { rules, snapshot }));
+                    return Ok(Some(TuiExit::Apply {
+                        rules,
+                        snapshot,
+                        dry_run: app.dry_run,
+                    }));
                 }
                 KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
                     app.confirm_apply = false;
@@ -452,7 +473,7 @@ fn handle_key(app: &mut AppState, key: KeyEvent) -> Result<Option<TuiExit>> {
             app.rescan_with_message(Some("Scan complete".to_string()));
         }
         KeyCode::Char('d') => {
-            app.dry_run = !app.dry_run;
+            app.toggle_dry_run();
         }
         KeyCode::Char('s') => {
             if !app.is_root {
@@ -524,15 +545,15 @@ fn handle_mouse(app: &mut AppState, mouse: MouseEvent) -> Result<Option<TuiExit>
 }
 
 fn begin_apply(app: &mut AppState) {
-    if app.dry_run {
-        app.message = Some("Disable dry-run before applying".to_string());
-    } else if app.selected_rules().is_empty() {
+    if app.selected_rules().is_empty() {
         app.message = Some("No rules selected".to_string());
+    } else if app.snapshot_enabled && app.dry_run {
+        app.message = Some("Disable dry-run to create snapshots".to_string());
     } else if app.snapshot_enabled && !app.include_sudo {
         app.message = Some("Enable sudo to use snapshots".to_string());
     } else {
         app.confirm_apply = true;
-        app.confirm_requires_delete = app.include_sudo;
+        app.confirm_requires_delete = app.include_sudo && !app.dry_run;
         app.confirm_buffer.clear();
     }
 }
@@ -547,7 +568,7 @@ fn handle_action_click(app: &mut AppState, col: u16, row: u16) -> Result<(bool, 
     }
     if let Some(rect) = actions.dry_run {
         if contains(rect, col, row) {
-            app.dry_run = !app.dry_run;
+            app.toggle_dry_run();
             return Ok((true, None));
         }
     }
@@ -622,11 +643,13 @@ fn build_action_line(area: Rect, app: &AppState) -> (String, ActionHitboxes) {
     let mut hitboxes = ActionHitboxes::default();
 
     let mut cursor = line.len() as u16;
-    let apply_enabled = !app.dry_run && !app.selected_rules().is_empty();
-    let apply_label = if apply_enabled {
-        "[Apply]"
-    } else {
+    let apply_enabled = !app.selected_rules().is_empty();
+    let apply_label = if !apply_enabled {
         "[Apply (disabled)]"
+    } else if app.dry_run {
+        "[Apply (dry-run)]"
+    } else {
+        "[Apply]"
     };
     let dry_label = if app.dry_run {
         "[Dry-run: ON]"
@@ -807,7 +830,11 @@ fn draw_ui(frame: &mut ratatui::Frame<'_>, app: &mut AppState) {
             format!("Type DELETE to confirm: {}", app.confirm_buffer)
         }
     } else if app.confirm_apply {
-        "Confirm delete? (y/n)".to_string()
+        if app.dry_run {
+            "Run dry-run preview? (y/n)".to_string()
+        } else {
+            "Confirm delete? (y/n)".to_string()
+        }
     } else {
         app.message.clone().unwrap_or_default()
     };
