@@ -86,6 +86,7 @@ struct RuleState {
 struct ActionHitboxes {
     apply: Option<Rect>,
     dry_run: Option<Rect>,
+    sudo: Option<Rect>,
     snapshot: Option<Rect>,
 }
 
@@ -467,7 +468,11 @@ fn handle_mouse(app: &mut AppState, mouse: MouseEvent) -> Result<Option<TuiExit>
             }
         }
         MouseEventKind::Down(MouseButton::Left) => {
-            if handle_action_click(app, col, row) {
+            let (handled, exit) = handle_action_click(app, col, row)?;
+            if handled {
+                if let Some(exit) = exit {
+                    return Ok(Some(exit));
+                }
                 return Ok(None);
             }
             if let Some(list_area) = app.layout.list_area {
@@ -499,27 +504,40 @@ fn begin_apply(app: &mut AppState) {
     }
 }
 
-fn handle_action_click(app: &mut AppState, col: u16, row: u16) -> bool {
+fn handle_action_click(app: &mut AppState, col: u16, row: u16) -> Result<(bool, Option<TuiExit>)> {
     let actions = &app.layout.actions;
     if let Some(rect) = actions.apply {
         if contains(rect, col, row) {
             begin_apply(app);
-            return true;
+            return Ok((true, None));
         }
     }
     if let Some(rect) = actions.dry_run {
         if contains(rect, col, row) {
             app.dry_run = !app.dry_run;
-            return true;
+            return Ok((true, None));
+        }
+    }
+    if let Some(rect) = actions.sudo {
+        if contains(rect, col, row) {
+            if !app.is_root {
+                if let Some(args) = build_sudo_reexec(app)? {
+                    return Ok((true, Some(TuiExit::ReexecSudo { args })));
+                }
+                app.message = Some("Sudo is unavailable in this environment".to_string());
+                return Ok((true, None));
+            }
+            app.toggle_sudo();
+            return Ok((true, None));
         }
     }
     if let Some(rect) = actions.snapshot {
         if contains(rect, col, row) {
             app.toggle_snapshot();
-            return true;
+            return Ok((true, None));
         }
     }
-    false
+    Ok((false, None))
 }
 
 fn build_sudo_reexec(app: &AppState) -> Result<Option<Vec<String>>> {
@@ -585,6 +603,15 @@ fn build_action_line(area: Rect, app: &AppState) -> (String, ActionHitboxes) {
     line.push(' ');
     cursor += 1;
     cursor = push_button(&mut line, inner, cursor, dry_label, &mut hitboxes.dry_run);
+
+    line.push(' ');
+    cursor += 1;
+    let sudo_label = if app.include_sudo {
+        "[Sudo: ON]"
+    } else {
+        "[Sudo: OFF]"
+    };
+    cursor = push_button(&mut line, inner, cursor, sudo_label, &mut hitboxes.sudo);
 
     if app.snapshot_support.is_some() {
         line.push(' ');
