@@ -570,7 +570,11 @@ fn handle_key(app: &mut AppState, key: KeyEvent) -> Result<Option<TuiExit>> {
             }
         } else {
             match key.code {
-                KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
+                KeyCode::Char('y')
+                | KeyCode::Char('Y')
+                | KeyCode::Char('\n')
+                | KeyCode::Char('\r')
+                | KeyCode::Enter => {
                     if app.dry_run {
                         app.run_dry_run();
                         app.confirm_apply = false;
@@ -698,6 +702,12 @@ fn handle_mouse(app: &mut AppState, mouse: MouseEvent) -> Result<Option<TuiExit>
                         app.toggle_at(index);
                     }
                 }
+            }
+        }
+        MouseEventKind::Drag(MouseButton::Left) => {
+            if in_scrollbar_area(app, col, row) {
+                app.jump_output_to_row(row);
+                return Ok((true, None));
             }
         }
         _ => {}
