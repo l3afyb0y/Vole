@@ -2,12 +2,15 @@ use std::io;
 use std::time::Duration;
 
 use anyhow::Result;
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{
+    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyModifiers,
+    MouseButton, MouseEvent, MouseEventKind,
+};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::ExecutableCommand;
 use humansize::{format_size, BINARY};
 use ratatui::backend::CrosstermBackend;
-use ratatui::layout::{Constraint, Direction, Layout};
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Line;
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
@@ -53,6 +56,19 @@ struct RuleState {
     scan: Option<crate::clean::RuleScan>,
 }
 
+#[derive(Debug, Default, Clone)]
+struct ActionHitboxes {
+    apply: Option<Rect>,
+    dry_run: Option<Rect>,
+    snapshot: Option<Rect>,
+}
+
+#[derive(Debug, Default, Clone)]
+struct UiLayout {
+    list_area: Option<Rect>,
+    actions: ActionHitboxes,
+}
+
 struct AppState {
     rules: Vec<RuleState>,
     list_state: ListState,
@@ -64,6 +80,7 @@ struct AppState {
     confirm_apply: bool,
     message: Option<String>,
     sudo_reexec_args: Option<Vec<String>>,
+    layout: UiLayout,
 }
 
 impl AppState {
@@ -101,6 +118,7 @@ impl AppState {
             confirm_apply: false,
             message: None,
             sudo_reexec_args,
+            layout: UiLayout::default(),
         }
     }
 
@@ -117,14 +135,59 @@ impl AppState {
 
     fn toggle_selected(&mut self) {
         if let Some(index) = self.list_state.selected() {
-            if let Some(state) = self.rules.get_mut(index) {
-                if state.rule.requires_sudo && (!self.include_sudo || !self.is_root) {
-                    self.message = Some("Requires sudo; restart as root to enable".to_string());
-                } else {
-                    state.enabled = !state.enabled;
-                }
+            self.toggle_at(index);
+        }
+    }
+
+    fn toggle_at(&mut self, index: usize) {
+        if let Some(state) = self.rules.get_mut(index) {
+            if state.rule.requires_sudo && (!self.include_sudo || !self.is_root) {
+                self.message = Some("Requires sudo; restart as root to enable".to_string());
+            } else {
+                state.enabled = !state.enabled;
             }
         }
+    }
+
+    fn move_selection(&mut self, delta: isize) {
+        let len = self.rules.len();
+        if len == 0 {
+            return;
+        }
+        let current = self.list_state.selected().unwrap_or(0) as isize;
+        let next = (current + delta).clamp(0, (len - 1) as isize) as usize;
+        self.select_index(next);
+    }
+
+    fn select_index(&mut self, index: usize) {
+        if self.rules.is_empty() {
+            self.list_state.select(None);
+            return;
+        }
+        let clamped = index.min(self.rules.len().saturating_sub(1));
+        self.list_state.select(Some(clamped));
+        self.ensure_visible(clamped);
+    }
+
+    fn ensure_visible(&mut self, index: usize) {
+        let height = self.list_height();
+        if height == 0 {
+            return;
+        }
+        let offset = self.list_state.offset();
+        let max_offset = self.rules.len().saturating_sub(height);
+        if index < offset {
+            *self.list_state.offset_mut() = index;
+        } else if index >= offset + height {
+            *self.list_state.offset_mut() = (index + 1 - height).min(max_offset);
+        }
+    }
+
+    fn list_height(&self) -> usize {
+        self.layout
+            .list_area
+            .map(|rect| rect.height as usize)
+            .unwrap_or_else(|| self.rules.len().max(1))
     }
 
     fn toggle_sudo(&mut self) {
@@ -177,10 +240,18 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut AppS
         terminal.draw(|frame| draw_ui(frame, app))?;
 
         if event::poll(Duration::from_millis(200))? {
-            if let Event::Key(key) = event::read()? {
-                if let Some(exit) = handle_key(app, key)? {
-                    return Ok(exit);
+            match event::read()? {
+                Event::Key(key) => {
+                    if let Some(exit) = handle_key(app, key)? {
+                        return Ok(exit);
+                    }
                 }
+                Event::Mouse(mouse) => {
+                    if let Some(exit) = handle_mouse(app, mouse)? {
+                        return Ok(exit);
+                    }
+                }
+                _ => {}
             }
         }
     }
@@ -209,18 +280,10 @@ fn handle_key(app: &mut AppState, key: KeyEvent) -> Result<Option<TuiExit>> {
     match key.code {
         KeyCode::Char('q') => return Ok(Some(TuiExit::Quit)),
         KeyCode::Down | KeyCode::Char('j') => {
-            let next = match app.list_state.selected() {
-                Some(i) => (i + 1).min(app.rules.len().saturating_sub(1)),
-                None => 0,
-            };
-            app.list_state.select(Some(next));
+            app.move_selection(1);
         }
         KeyCode::Up | KeyCode::Char('k') => {
-            let prev = match app.list_state.selected() {
-                Some(i) => i.saturating_sub(1),
-                None => 0,
-            };
-            app.list_state.select(Some(prev));
+            app.move_selection(-1);
         }
         KeyCode::Char(' ') => {
             app.toggle_selected();
@@ -245,13 +308,7 @@ fn handle_key(app: &mut AppState, key: KeyEvent) -> Result<Option<TuiExit>> {
             app.toggle_snapshot();
         }
         KeyCode::Char('a') => {
-            if app.dry_run {
-                app.message = Some("Disable dry-run before applying".to_string());
-            } else if app.selected_rules().is_empty() {
-                app.message = Some("No rules selected".to_string());
-            } else {
-                app.confirm_apply = true;
-            }
+            begin_apply(app);
         }
         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             return Ok(Some(TuiExit::Quit));
@@ -262,13 +319,156 @@ fn handle_key(app: &mut AppState, key: KeyEvent) -> Result<Option<TuiExit>> {
     Ok(None)
 }
 
+fn handle_mouse(app: &mut AppState, mouse: MouseEvent) -> Result<Option<TuiExit>> {
+    if app.confirm_apply {
+        return Ok(None);
+    }
+
+    let row = mouse.row;
+    let col = mouse.column;
+
+    match mouse.kind {
+        MouseEventKind::ScrollDown => {
+            if in_list_area(app, col, row) {
+                app.move_selection(1);
+            }
+        }
+        MouseEventKind::ScrollUp => {
+            if in_list_area(app, col, row) {
+                app.move_selection(-1);
+            }
+        }
+        MouseEventKind::Down(MouseButton::Left) => {
+            if handle_action_click(app, col, row) {
+                return Ok(None);
+            }
+            if let Some(list_area) = app.layout.list_area {
+                if contains(list_area, col, row) {
+                    let offset = app.list_state.offset();
+                    let index = offset + (row.saturating_sub(list_area.y) as usize);
+                    if index < app.rules.len() {
+                        app.select_index(index);
+                        app.toggle_at(index);
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+
+    Ok(None)
+}
+
+fn begin_apply(app: &mut AppState) {
+    if app.dry_run {
+        app.message = Some("Disable dry-run before applying".to_string());
+    } else if app.selected_rules().is_empty() {
+        app.message = Some("No rules selected".to_string());
+    } else {
+        app.confirm_apply = true;
+    }
+}
+
+fn handle_action_click(app: &mut AppState, col: u16, row: u16) -> bool {
+    let actions = &app.layout.actions;
+    if let Some(rect) = actions.apply {
+        if contains(rect, col, row) {
+            begin_apply(app);
+            return true;
+        }
+    }
+    if let Some(rect) = actions.dry_run {
+        if contains(rect, col, row) {
+            app.dry_run = !app.dry_run;
+            return true;
+        }
+    }
+    if let Some(rect) = actions.snapshot {
+        if contains(rect, col, row) {
+            app.toggle_snapshot();
+            return true;
+        }
+    }
+    false
+}
+
+fn in_list_area(app: &AppState, col: u16, row: u16) -> bool {
+    app.layout
+        .list_area
+        .map(|rect| contains(rect, col, row))
+        .unwrap_or(false)
+}
+
+fn contains(rect: Rect, col: u16, row: u16) -> bool {
+    col >= rect.x && col < rect.x + rect.width && row >= rect.y && row < rect.y + rect.height
+}
+
+fn build_action_line(area: Rect, app: &AppState) -> (String, ActionHitboxes) {
+    let block = Block::default().borders(Borders::ALL).title("Status");
+    let inner = block.inner(area);
+
+    let mut line = String::from("Actions: ");
+    let mut hitboxes = ActionHitboxes::default();
+
+    let mut cursor = line.len() as u16;
+    let apply_label = "[Apply]";
+    let dry_label = if app.dry_run { "[Dry-run: ON]" } else { "[Dry-run: OFF]" };
+
+    cursor = push_button(&mut line, inner, cursor, apply_label, &mut hitboxes.apply);
+    line.push(' ');
+    cursor += 1;
+    cursor = push_button(&mut line, inner, cursor, dry_label, &mut hitboxes.dry_run);
+
+    if app.snapshot_support.is_some() {
+        line.push(' ');
+        cursor += 1;
+        let snapshot_label = if app.snapshot_enabled {
+            "[Snapshot: ON]"
+        } else {
+            "[Snapshot: OFF]"
+        };
+        let _ = push_button(&mut line, inner, cursor, snapshot_label, &mut hitboxes.snapshot);
+    }
+
+    (line, hitboxes)
+}
+
+fn push_button(
+    line: &mut String,
+    inner: Rect,
+    cursor: u16,
+    label: &str,
+    target: &mut Option<Rect>,
+) -> u16 {
+    let start = cursor;
+    line.push_str(label);
+    let end = start.saturating_add(label.len() as u16);
+
+    if inner.height >= 3 {
+        let action_y = inner.y + 2;
+        let max_x = inner.x.saturating_add(inner.width);
+        let start_x = inner.x.saturating_add(start);
+        let end_x = inner.x.saturating_add(end);
+        if start_x < max_x && end_x <= max_x {
+            *target = Some(Rect {
+                x: start_x,
+                y: action_y,
+                width: label.len() as u16,
+                height: 1,
+            });
+        }
+    }
+
+    end
+}
+
 fn draw_ui(frame: &mut ratatui::Frame<'_>, app: &mut AppState) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .margin(1)
         .constraints([
             Constraint::Min(5),
-            Constraint::Length(4),
+            Constraint::Length(6),
             Constraint::Length(3),
         ])
         .split(frame.size());
@@ -289,8 +489,11 @@ fn draw_ui(frame: &mut ratatui::Frame<'_>, app: &mut AppState) {
         })
         .collect::<Vec<_>>();
 
+    let list_block = Block::default().title("Cleanup Rules").borders(Borders::ALL);
+    let list_area = list_block.inner(chunks[0]);
+    app.layout.list_area = Some(list_area);
     let list = List::new(items)
-        .block(Block::default().title("Cleanup Rules").borders(Borders::ALL))
+        .block(list_block)
         .highlight_style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD));
 
     frame.render_stateful_widget(list, chunks[0], &mut app.list_state);
@@ -318,13 +521,22 @@ fn draw_ui(frame: &mut ratatui::Frame<'_>, app: &mut AppState) {
         )
     };
 
+    let (action_line, actions) = build_action_line(chunks[1], app);
+    app.layout.actions = actions;
+
     let mut help = "Keys: j/k or arrows move | space toggle | r rescan | d dry-run | s sudo".to_string();
     if app.snapshot_support.is_some() {
         help.push_str(" | p snapshot");
     }
-    help.push_str(" | a apply | q quit");
-    let summary_block = Paragraph::new(vec![Line::from(summary), Line::from(mode), Line::from(help)])
-        .block(Block::default().borders(Borders::ALL).title("Status"));
+    help.push_str(" | a apply | q quit | mouse: click, scroll");
+    let status_block = Block::default().borders(Borders::ALL).title("Status");
+    let summary_block = Paragraph::new(vec![
+        Line::from(summary),
+        Line::from(mode),
+        Line::from(action_line),
+        Line::from(help),
+    ])
+    .block(status_block);
     frame.render_widget(summary_block, chunks[1]);
 
     let message = if app.confirm_apply {
@@ -349,13 +561,14 @@ fn setup_terminal() -> Result<Terminal<CrosstermBackend<io::Stdout>>> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     stdout.execute(EnterAlternateScreen)?;
+    stdout.execute(EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     Ok(Terminal::new(backend)?)
 }
 
 fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
     disable_raw_mode()?;
-    crossterm::execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    crossterm::execute!(terminal.backend_mut(), DisableMouseCapture, LeaveAlternateScreen)?;
     terminal.show_cursor()?;
     Ok(())
 }

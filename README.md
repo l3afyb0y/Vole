@@ -45,6 +45,7 @@ Keys:
 - `p`: snapshot (only shown when supported)
 - `a`: apply
 - `q`: quit
+- Mouse: click to toggle, scroll to move, use action buttons
 
 ### CLI
 
