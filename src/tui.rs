@@ -105,7 +105,9 @@ struct ActionLine {
 #[derive(Debug, Default, Clone)]
 struct UiLayout {
     list_area: Option<Rect>,
+    output_block_area: Option<Rect>,
     output_area: Option<Rect>,
+    output_scrollbar_area: Option<Rect>,
     actions: ActionHitboxes,
 }
 
@@ -296,6 +298,29 @@ impl AppState {
         let height = self.output_height();
         let max_offset = self.output_lines.len().saturating_sub(height);
         self.output_scroll = max_offset;
+    }
+
+    fn jump_output_to_row(&mut self, row: u16) {
+        let Some(area) = self.layout.output_scrollbar_area else {
+            return;
+        };
+        if self.output_lines.is_empty() || area.height == 0 {
+            return;
+        }
+        let height = self.output_height();
+        if height == 0 || self.output_lines.len() <= height {
+            self.output_scroll = 0;
+            return;
+        }
+        let max_offset = self.output_lines.len().saturating_sub(height);
+        let row_offset = row.saturating_sub(area.y) as usize;
+        if area.height == 1 {
+            self.output_scroll = 0;
+            return;
+        }
+        let denom = (area.height - 1) as usize;
+        let pos = (row_offset.saturating_mul(max_offset)) / denom;
+        self.output_scroll = pos.min(max_offset);
     }
 
     fn toggle_sudo(&mut self) {
@@ -545,7 +570,7 @@ fn handle_key(app: &mut AppState, key: KeyEvent) -> Result<Option<TuiExit>> {
             }
         } else {
             match key.code {
-                KeyCode::Char('y') | KeyCode::Char('Y') => {
+                KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
                     if app.dry_run {
                         app.run_dry_run();
                         app.confirm_apply = false;
@@ -653,6 +678,10 @@ fn handle_mouse(app: &mut AppState, mouse: MouseEvent) -> Result<Option<TuiExit>
             }
         }
         MouseEventKind::Down(MouseButton::Left) => {
+            if in_scrollbar_area(app, col, row) {
+                app.jump_output_to_row(row);
+                return Ok((true, None));
+            }
             let (handled, exit) = handle_action_click(app, col, row)?;
             if handled {
                 if let Some(exit) = exit {
@@ -766,7 +795,14 @@ fn in_list_area(app: &AppState, col: u16, row: u16) -> bool {
 
 fn in_output_area(app: &AppState, col: u16, row: u16) -> bool {
     app.layout
-        .output_area
+        .output_block_area
+        .map(|rect| contains(rect, col, row))
+        .unwrap_or(false)
+}
+
+fn in_scrollbar_area(app: &AppState, col: u16, row: u16) -> bool {
+    app.layout
+        .output_scrollbar_area
         .map(|rect| contains(rect, col, row))
         .unwrap_or(false)
 }
@@ -1002,6 +1038,7 @@ fn draw_ui(frame: &mut ratatui::Frame<'_>, app: &mut AppState) {
     let output_title = "Output".to_string();
     let output_block = Block::default().borders(Borders::ALL).title(output_title);
     let output_inner = output_block.inner(chunks[2]);
+    app.layout.output_block_area = Some(chunks[2]);
     app.layout.output_area = Some(output_inner);
     let height = output_inner.height as usize;
     app.clamp_output_scroll();
@@ -1019,6 +1056,7 @@ fn draw_ui(frame: &mut ratatui::Frame<'_>, app: &mut AppState) {
     } else {
         None
     };
+    app.layout.output_scrollbar_area = scrollbar_area;
 
     frame.render_widget(output_block, chunks[2]);
     let lines = if app.output_lines.is_empty() {
