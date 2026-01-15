@@ -686,7 +686,7 @@ fn handle_mouse(app: &mut AppState, mouse: MouseEvent) -> Result<Option<TuiExit>
         MouseEventKind::Down(MouseButton::Left) => {
             if in_scrollbar_area(app, col, row) || in_output_area(app, col, row) {
                 app.jump_output_to_row(row);
-                return Ok((true, None));
+                return Ok(None);
             }
             let (handled, exit) = handle_action_click(app, col, row)?;
             if handled {
@@ -709,7 +709,7 @@ fn handle_mouse(app: &mut AppState, mouse: MouseEvent) -> Result<Option<TuiExit>
         MouseEventKind::Drag(MouseButton::Left) => {
             if in_scrollbar_area(app, col, row) || in_output_area(app, col, row) {
                 app.jump_output_to_row(row);
-                return Ok((true, None));
+                return Ok(None);
             }
         }
         _ => {}
