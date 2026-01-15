@@ -242,12 +242,22 @@ impl AppState {
             self.dry_run = true;
             self.rescan_with_message(Some("Sudo mode enabled: dry-run forced ON".to_string()));
         } else {
-            self.rescan_with_message(Some("Scan complete".to_string()));
+            let message = if !self.include_sudo {
+                self.snapshot_enabled = false;
+                Some("Sudo rules disabled (still running as root)".to_string())
+            } else {
+                Some("Scan complete".to_string())
+            };
+            self.rescan_with_message(message);
         }
     }
 
     fn toggle_snapshot(&mut self) {
         if self.snapshot_support.is_none() {
+            return;
+        }
+        if !self.include_sudo {
+            self.message = Some("Enable sudo to use snapshots".to_string());
             return;
         }
         self.snapshot_enabled = !self.snapshot_enabled;
@@ -283,28 +293,9 @@ impl AppState {
         } else {
             state.dry_run
         };
-        self.snapshot_enabled = state.snapshot_enabled && self.snapshot_support.is_some();
-        let enabled = state
-            .enabled_rules
-            .iter()
-            .map(|id| id.to_lowercase())
-            .collect::<Vec<_>>();
-        for (index, rule) in self.rules.iter_mut().enumerate() {
-            let should_enable = enabled.iter().any(|id| id == &rule.rule.id.to_lowercase());
-            rule.enabled = if rule.rule.requires_sudo && !self.include_sudo {
-                false
-            } else {
-                should_enable
-            };
-            if let Some(selected_id) = &state.selected_rule {
-                if rule.rule.id.eq_ignore_ascii_case(selected_id) {
-                    self.list_state.select(Some(index));
-                }
-            }
-        }
-        if self.list_state.selected().is_none() && !self.rules.is_empty() {
-            self.list_state.select(Some(0));
-        }
+        self.snapshot_enabled =
+            state.snapshot_enabled && self.snapshot_support.is_some() && self.include_sudo;
+        self.apply_enabled_rules(&state.enabled_rules, state.selected_rule.as_deref());
     }
 
     fn export_state(&self) -> PersistedState {
@@ -323,6 +314,46 @@ impl AppState {
             dry_run: self.dry_run,
             snapshot_enabled: self.snapshot_enabled,
             include_sudo: self.include_sudo,
+        }
+    }
+
+    fn export_state_for_sudo(&self) -> PersistedState {
+        let mut state = self.export_state();
+        state.include_sudo = true;
+        for rule in &self.rules {
+            if rule.rule.requires_sudo && rule.rule.enabled_by_default {
+                if !state
+                    .enabled_rules
+                    .iter()
+                    .any(|id| id.eq_ignore_ascii_case(&rule.rule.id))
+                {
+                    state.enabled_rules.push(rule.rule.id.clone());
+                }
+            }
+        }
+        state
+    }
+
+    fn apply_enabled_rules(&mut self, enabled_rules: &[String], selected_rule: Option<&str>) {
+        let enabled = enabled_rules
+            .iter()
+            .map(|id| id.to_lowercase())
+            .collect::<Vec<_>>();
+        for (index, rule) in self.rules.iter_mut().enumerate() {
+            let should_enable = enabled.iter().any(|id| id == &rule.rule.id.to_lowercase());
+            rule.enabled = if rule.rule.requires_sudo && !self.include_sudo {
+                false
+            } else {
+                should_enable
+            };
+            if let Some(selected_id) = selected_rule {
+                if rule.rule.id.eq_ignore_ascii_case(selected_id) {
+                    self.list_state.select(Some(index));
+                }
+            }
+        }
+        if self.list_state.selected().is_none() && !self.rules.is_empty() {
+            self.list_state.select(Some(0));
         }
     }
 }
@@ -497,6 +528,8 @@ fn begin_apply(app: &mut AppState) {
         app.message = Some("Disable dry-run before applying".to_string());
     } else if app.selected_rules().is_empty() {
         app.message = Some("No rules selected".to_string());
+    } else if app.snapshot_enabled && !app.include_sudo {
+        app.message = Some("Enable sudo to use snapshots".to_string());
     } else {
         app.confirm_apply = true;
         app.confirm_requires_delete = app.include_sudo;
@@ -544,17 +577,22 @@ fn build_sudo_reexec(app: &AppState) -> Result<Option<Vec<String>>> {
     let Some(mut args) = app.sudo_reexec_args.clone() else {
         return Ok(None);
     };
-    let path = save_state_to_temp(app)?;
+    let path = save_state_to_temp(app, true)?;
     args.push("--tui-state".to_string());
     args.push(path.to_string_lossy().to_string());
     Ok(Some(args))
 }
 
-fn save_state_to_temp(app: &AppState) -> Result<PathBuf> {
+fn save_state_to_temp(app: &AppState, force_sudo: bool) -> Result<PathBuf> {
     let mut path = std::env::temp_dir();
     let pid = std::process::id();
     path.push(format!("vole-tui-state-{}.json", pid));
-    let data = serde_json::to_vec(&app.export_state())?;
+    let state = if force_sudo {
+        app.export_state_for_sudo()
+    } else {
+        app.export_state()
+    };
+    let data = serde_json::to_vec(&state)?;
     std::fs::write(&path, data)?;
     Ok(path)
 }
