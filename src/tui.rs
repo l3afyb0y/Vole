@@ -15,7 +15,7 @@ use humansize::{format_size, BINARY};
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::Line;
+use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 use ratatui::Terminal;
 use serde::{Deserialize, Serialize};
@@ -770,18 +770,32 @@ fn draw_ui(frame: &mut ratatui::Frame<'_>, app: &mut AppState) {
     let (action_line, actions) = build_action_line(chunks[1], app);
     app.layout.actions = actions;
 
-    let mut help =
-        "Keys: j/k or arrows move | space toggle | r rescan | d dry-run | s sudo".to_string();
+    let mut help_spans = vec![Span::raw(
+        "Keys: j/k or arrows move | space toggle | r rescan | ",
+    )];
+    help_spans.push(Span::styled("d dry-run", Style::default().fg(Color::Green)));
+    help_spans.push(Span::raw(" | "));
+    help_spans.push(Span::styled("s sudo", Style::default().fg(Color::Red)));
     if app.snapshot_support.is_some() {
-        help.push_str(" | p snapshot");
+        help_spans.push(Span::raw(" | "));
+        help_spans.push(Span::styled(
+            "p snapshot",
+            Style::default().fg(Color::Yellow),
+        ));
     }
-    help.push_str(" | a apply | q quit | mouse: click, scroll");
+    help_spans.push(Span::raw(" | "));
+    help_spans.push(Span::styled("a apply", Style::default().fg(Color::Red)));
+    help_spans.push(Span::raw(" | q quit | "));
+    help_spans.push(Span::styled(
+        "mouse: click, scroll",
+        Style::default().fg(Color::LightCyan),
+    ));
     let status_block = Block::default().borders(Borders::ALL).title("Status");
     let summary_block = Paragraph::new(vec![
-        Line::from(summary),
-        Line::from(mode),
-        Line::from(action_line),
-        Line::from(help),
+        Line::styled(summary, Style::default().fg(Color::Cyan)),
+        Line::styled(mode, Style::default().fg(Color::LightBlue)),
+        Line::styled(action_line, Style::default().fg(Color::Blue)),
+        Line::from(help_spans),
     ])
     .block(status_block);
     frame.render_widget(summary_block, chunks[1]);
