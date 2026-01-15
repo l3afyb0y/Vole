@@ -88,9 +88,7 @@ impl Rule {
             .iter()
             .map(|d| d.to_lowercase())
             .collect::<Vec<_>>();
-        distros
-            .iter()
-            .any(|d| distro_ids.iter().any(|id| id == d))
+        distros.iter().any(|d| distro_ids.iter().any(|id| id == d))
     }
 
     pub fn expanded_paths(&self) -> Vec<PathBuf> {

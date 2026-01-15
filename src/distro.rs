@@ -36,10 +36,7 @@ pub fn detect() -> Distro {
         match key {
             "ID" => distro.id = Some(value.to_string()),
             "ID_LIKE" => {
-                distro.id_like = value
-                    .split_whitespace()
-                    .map(|s| s.to_string())
-                    .collect();
+                distro.id_like = value.split_whitespace().map(|s| s.to_string()).collect();
             }
             _ => {}
         }

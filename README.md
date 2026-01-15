@@ -76,7 +76,11 @@ Vole only offers snapshotting when it detects a supported provider:
 - Btrfs (home subvolume)
 - Timeshift (Btrfs mode only)
 
-If no supported snapshot provider is detected, the snapshot option is hidden.
+If no supported snapshot provider is detected, the snapshot option is hidden. Snapshotting
+is only available when running with sudo/root.
+
+Btrfs snapshots are stored outside the source subvolume under the parent directory's
+`.snapshots/vole` folder.
 
 ## Safety Notes
 

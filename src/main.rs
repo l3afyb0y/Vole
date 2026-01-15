@@ -1,5 +1,5 @@
-mod cli;
 mod clean;
+mod cli;
 mod config;
 mod distro;
 mod snapshot;
@@ -12,28 +12,37 @@ use anyhow::{bail, Context, Result};
 use clap::Parser;
 use humansize::{format_size, BINARY};
 
-use crate::cli::{CleanArgs, Cli, Commands};
 use crate::clean::scan_rules;
+use crate::cli::{CleanArgs, Cli, Commands};
 use crate::config::Config;
 use crate::distro::Distro;
 use crate::snapshot::SnapshotSupport;
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    let is_root = is_root();
+    let user_home = match &cli.command {
+        Some(Commands::Clean(args)) => args.user_home.as_deref(),
+        None => None,
+    };
+    let home = resolve_home(is_root, user_home).context("Failed to resolve home directory")?;
+    std::env::set_var("HOME", &home);
     let config = Config::load(cli.config.as_deref())?;
     let distro = distro::detect();
-    let is_root = is_root();
-    let home = home_dir().context("Failed to resolve $HOME")?;
-    let snapshot_support = snapshot::detect(&home);
+    let snapshot_support = if is_root {
+        snapshot::detect(&home)
+    } else {
+        None
+    };
 
     match &cli.command {
         Some(Commands::Clean(args)) => {
             if args.sudo && !is_root {
-                let sudo_args = build_sudo_args(&cli, args)?;
+                let sudo_args = build_sudo_args(&cli, args, &home)?;
                 return reexec_with_sudo(&sudo_args);
             }
             if args.tui {
-                let sudo_reexec = build_tui_sudo_reexec(&cli)?;
+                let sudo_reexec = build_tui_sudo_reexec(&cli, &home)?;
                 let tui_state = load_tui_state(args.tui_state.as_deref())?;
                 return handle_tui(tui::run(
                     config.available_rules(&distro),
@@ -48,7 +57,7 @@ fn main() -> Result<()> {
             run_clean_cli(&config, &distro, args, snapshot_support, is_root)
         }
         None => {
-            let sudo_reexec = build_tui_sudo_reexec(&cli)?;
+            let sudo_reexec = build_tui_sudo_reexec(&cli, &home)?;
             handle_tui(tui::run(
                 config.available_rules(&distro),
                 snapshot_support,
@@ -87,7 +96,11 @@ fn run_clean_cli(
 
         let unknown = selected
             .iter()
-            .filter(|id| !available_rules.iter().any(|rule| rule.id.to_lowercase() == **id))
+            .filter(|id| {
+                !available_rules
+                    .iter()
+                    .any(|rule| rule.id.to_lowercase() == **id)
+            })
             .cloned()
             .collect::<Vec<_>>();
         if !unknown.is_empty() {
@@ -101,6 +114,10 @@ fn run_clean_cli(
         rules.retain(|rule| !rule.requires_sudo);
     } else if !is_root {
         bail!("--sudo requires running as root (try: sudo vole clean --sudo)");
+    }
+
+    if args.snapshot && !is_root {
+        bail!("--snapshot requires root (try: sudo vole clean --sudo --snapshot)");
     }
 
     if rules.is_empty() {
@@ -117,7 +134,8 @@ fn run_clean_cli(
     }
 
     if args.snapshot {
-        let support = snapshot_support.context("Snapshot requested but no supported provider detected")?;
+        let support =
+            snapshot_support.context("Snapshot requested but no supported provider detected")?;
         let outcome = snapshot::create_snapshot(&support)?;
         println!("{}", outcome.display());
     }
@@ -128,7 +146,10 @@ fn run_clean_cli(
     }
 
     let report = clean::apply(&scans);
-    println!("Removed {} files and {} directories", report.files_removed, report.dirs_removed);
+    println!(
+        "Removed {} files and {} directories",
+        report.files_removed, report.dirs_removed
+    );
     println!("Freed {}", format_size(report.bytes_freed, BINARY));
     if report.errors > 0 {
         println!("Errors encountered: {}", report.errors);
@@ -141,7 +162,11 @@ fn print_rules(rules: &[crate::config::Rule]) {
     println!("Available rules:");
     for rule in rules {
         let sudo = if rule.requires_sudo { " (sudo)" } else { "" };
-        let enabled = if rule.enabled_by_default { " [default]" } else { "" };
+        let enabled = if rule.enabled_by_default {
+            " [default]"
+        } else {
+            ""
+        };
         println!("- {}{}{}", rule.id, sudo, enabled);
         if let Some(desc) = &rule.description {
             println!("  {}", desc);
@@ -200,7 +225,10 @@ fn handle_tui(exit: tui::TuiExit) -> Result<()> {
 
             let scans = rules.iter().map(clean::scan_rule).collect::<Vec<_>>();
             let report = clean::apply(&scans);
-            println!("Removed {} files and {} directories", report.files_removed, report.dirs_removed);
+            println!(
+                "Removed {} files and {} directories",
+                report.files_removed, report.dirs_removed
+            );
             println!("Freed {}", format_size(report.bytes_freed, BINARY));
             if report.errors > 0 {
                 println!("Errors encountered: {}", report.errors);
@@ -210,7 +238,7 @@ fn handle_tui(exit: tui::TuiExit) -> Result<()> {
     }
 }
 
-fn build_sudo_args(cli: &Cli, args: &CleanArgs) -> Result<Vec<String>> {
+fn build_sudo_args(cli: &Cli, args: &CleanArgs, home: &Path) -> Result<Vec<String>> {
     let exe = std::env::current_exe()
         .context("Failed to resolve current executable path")?
         .to_string_lossy()
@@ -225,6 +253,8 @@ fn build_sudo_args(cli: &Cli, args: &CleanArgs) -> Result<Vec<String>> {
         sudo_args.push("--tui".to_string());
     }
     sudo_args.push("--sudo".to_string());
+    sudo_args.push("--user-home".to_string());
+    sudo_args.push(home.to_string_lossy().to_string());
     if args.dry_run {
         sudo_args.push("--dry-run".to_string());
     }
@@ -244,7 +274,7 @@ fn build_sudo_args(cli: &Cli, args: &CleanArgs) -> Result<Vec<String>> {
     Ok(sudo_args)
 }
 
-fn build_tui_sudo_reexec(cli: &Cli) -> Result<Option<Vec<String>>> {
+fn build_tui_sudo_reexec(cli: &Cli, home: &Path) -> Result<Option<Vec<String>>> {
     let exe = std::env::current_exe()
         .context("Failed to resolve current executable path")?
         .to_string_lossy()
@@ -257,6 +287,8 @@ fn build_tui_sudo_reexec(cli: &Cli) -> Result<Option<Vec<String>>> {
     sudo_args.push("clean".to_string());
     sudo_args.push("--tui".to_string());
     sudo_args.push("--sudo".to_string());
+    sudo_args.push("--user-home".to_string());
+    sudo_args.push(home.to_string_lossy().to_string());
     Ok(Some(sudo_args))
 }
 
@@ -281,6 +313,34 @@ fn is_root() -> bool {
     unsafe { libc::geteuid() == 0 }
 }
 
-fn home_dir() -> Option<PathBuf> {
+fn resolve_home(is_root: bool, override_home: Option<&Path>) -> Option<PathBuf> {
+    if let Some(home) = override_home {
+        return Some(home.to_path_buf());
+    }
+    if is_root {
+        if let Some(home) = home_from_sudo_user() {
+            return Some(home);
+        }
+    }
     std::env::var_os("HOME").map(PathBuf::from)
+}
+
+fn home_from_sudo_user() -> Option<PathBuf> {
+    let user = std::env::var("SUDO_USER").ok()?;
+    let passwd = std::fs::read_to_string("/etc/passwd").ok()?;
+    let prefix = format!("{user}:");
+    for line in passwd.lines() {
+        if !line.starts_with(&prefix) {
+            continue;
+        }
+        let mut parts = line.split(':');
+        let _name = parts.next();
+        let _password = parts.next();
+        let _uid = parts.next();
+        let _gid = parts.next();
+        let _gecos = parts.next();
+        let home = parts.next()?;
+        return Some(PathBuf::from(home));
+    }
+    None
 }

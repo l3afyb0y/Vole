@@ -111,6 +111,7 @@ fn scan_root(root: &Path, exclude: Option<&GlobSet>, scan: &mut RuleScan) -> Res
     let mut errors = 0;
     let mut iter = WalkDir::new(root)
         .follow_links(false)
+        .same_file_system(true)
         .into_iter()
         .filter_entry(|entry| filter_entry(entry, root, exclude));
 

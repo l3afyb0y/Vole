@@ -47,12 +47,19 @@
         "~/.cache"
       ],
       "exclude_globs": [
+        "**/mozilla",
         "**/mozilla/**",
+        "**/firefox",
         "**/firefox/**",
+        "**/chromium",
         "**/chromium/**",
+        "**/google-chrome",
         "**/google-chrome/**",
+        "**/brave",
         "**/brave/**",
+        "**/vivaldi",
         "**/vivaldi/**",
+        "**/opera",
         "**/opera/**"
       ],
       "enabled_by_default": true

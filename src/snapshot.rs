@@ -107,7 +107,7 @@ fn timeshift_btrfs_enabled(data: &str) -> bool {
 }
 
 fn create_btrfs_snapshot(source: &Path) -> Result<SnapshotOutcome> {
-    let snapshot_dir = source.join(".local/share/vole/snapshots");
+    let snapshot_dir = snapshot_base_dir(source)?;
     fs::create_dir_all(&snapshot_dir)
         .with_context(|| format!("Failed to create {}", snapshot_dir.display()))?;
 
@@ -115,8 +115,12 @@ fn create_btrfs_snapshot(source: &Path) -> Result<SnapshotOutcome> {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-    let name = format!("vole-clean-{}", ts);
+    let pid = std::process::id();
+    let name = format!("vole-clean-{}-{}", ts, pid);
     let dest = snapshot_dir.join(name);
+    if dest.starts_with(source) {
+        bail!("Snapshot destination must be outside the source subvolume");
+    }
 
     let status = Command::new("btrfs")
         .args(["subvolume", "snapshot", "-r"])
@@ -133,6 +137,17 @@ fn create_btrfs_snapshot(source: &Path) -> Result<SnapshotOutcome> {
         provider: "Btrfs".to_string(),
         location: Some(dest),
     })
+}
+
+fn snapshot_base_dir(source: &Path) -> Result<PathBuf> {
+    let parent = source
+        .parent()
+        .context("Unable to determine snapshot parent directory")?;
+    let snapshot_dir = parent.join(".snapshots/vole");
+    if snapshot_dir.starts_with(source) {
+        bail!("Snapshot destination must be outside the source subvolume");
+    }
+    Ok(snapshot_dir)
 }
 
 fn create_timeshift_snapshot() -> Result<SnapshotOutcome> {

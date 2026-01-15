@@ -7,7 +7,9 @@ use crossterm::event::{
     self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyModifiers,
     MouseButton, MouseEvent, MouseEventKind,
 };
-use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
+use crossterm::terminal::{
+    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+};
 use crossterm::ExecutableCommand;
 use humansize::{format_size, BINARY};
 use ratatui::backend::CrosstermBackend;
@@ -137,7 +139,11 @@ impl AppState {
                 })
                 .collect(),
             list_state,
-            dry_run: if include_sudo { true } else { start_with_dry_run },
+            dry_run: if include_sudo {
+                true
+            } else {
+                start_with_dry_run
+            },
             include_sudo,
             is_root,
             snapshot_support,
@@ -271,7 +277,11 @@ impl AppState {
 
     fn apply_state(&mut self, state: &PersistedState) {
         self.include_sudo = self.is_root && state.include_sudo;
-        self.dry_run = if self.include_sudo { true } else { state.dry_run };
+        self.dry_run = if self.include_sudo {
+            true
+        } else {
+            state.dry_run
+        };
         self.snapshot_enabled = state.snapshot_enabled && self.snapshot_support.is_some();
         let enabled = state
             .enabled_rules
@@ -316,7 +326,10 @@ impl AppState {
     }
 }
 
-fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut AppState) -> Result<TuiExit> {
+fn run_app(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    app: &mut AppState,
+) -> Result<TuiExit> {
     loop {
         terminal.draw(|frame| draw_ui(frame, app))?;
 
@@ -559,7 +572,11 @@ fn build_action_line(area: Rect, app: &AppState) -> (String, ActionHitboxes) {
     } else {
         "[Apply (disabled)]"
     };
-    let dry_label = if app.dry_run { "[Dry-run: ON]" } else { "[Dry-run: OFF]" };
+    let dry_label = if app.dry_run {
+        "[Dry-run: ON]"
+    } else {
+        "[Dry-run: OFF]"
+    };
 
     cursor = push_button(&mut line, inner, cursor, apply_label, &mut hitboxes.apply);
     if !apply_enabled {
@@ -577,7 +594,13 @@ fn build_action_line(area: Rect, app: &AppState) -> (String, ActionHitboxes) {
         } else {
             "[Snapshot: OFF]"
         };
-        let _ = push_button(&mut line, inner, cursor, snapshot_label, &mut hitboxes.snapshot);
+        let _ = push_button(
+            &mut line,
+            inner,
+            cursor,
+            snapshot_label,
+            &mut hitboxes.snapshot,
+        );
     }
 
     (line, hitboxes)
@@ -628,7 +651,11 @@ fn draw_ui(frame: &mut ratatui::Frame<'_>, app: &mut AppState) {
         .iter()
         .map(|state| {
             let enabled = if state.enabled { "x" } else { " " };
-            let sudo = if state.rule.requires_sudo { " (sudo)" } else { "" };
+            let sudo = if state.rule.requires_sudo {
+                " (sudo)"
+            } else {
+                ""
+            };
             let size = state
                 .scan
                 .as_ref()
@@ -639,12 +666,16 @@ fn draw_ui(frame: &mut ratatui::Frame<'_>, app: &mut AppState) {
         })
         .collect::<Vec<_>>();
 
-    let list_block = Block::default().title("Cleanup Rules").borders(Borders::ALL);
+    let list_block = Block::default()
+        .title("Cleanup Rules")
+        .borders(Borders::ALL);
     let list_area = list_block.inner(chunks[0]);
     app.layout.list_area = Some(list_area);
-    let list = List::new(items)
-        .block(list_block)
-        .highlight_style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD));
+    let list = List::new(items).block(list_block).highlight_style(
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD),
+    );
 
     frame.render_stateful_widget(list, chunks[0], &mut app.list_state);
 
@@ -674,7 +705,8 @@ fn draw_ui(frame: &mut ratatui::Frame<'_>, app: &mut AppState) {
     let (action_line, actions) = build_action_line(chunks[1], app);
     app.layout.actions = actions;
 
-    let mut help = "Keys: j/k or arrows move | space toggle | r rescan | d dry-run | s sudo".to_string();
+    let mut help =
+        "Keys: j/k or arrows move | space toggle | r rescan | d dry-run | s sudo".to_string();
     if app.snapshot_support.is_some() {
         help.push_str(" | p snapshot");
     }
@@ -700,8 +732,8 @@ fn draw_ui(frame: &mut ratatui::Frame<'_>, app: &mut AppState) {
     } else {
         app.message.clone().unwrap_or_default()
     };
-    let message_block = Paragraph::new(message)
-        .block(Block::default().borders(Borders::ALL).title("Message"));
+    let message_block =
+        Paragraph::new(message).block(Block::default().borders(Borders::ALL).title("Message"));
     frame.render_widget(message_block, chunks[2]);
 }
 
@@ -724,7 +756,11 @@ fn setup_terminal() -> Result<Terminal<CrosstermBackend<io::Stdout>>> {
 
 fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
     disable_raw_mode()?;
-    crossterm::execute!(terminal.backend_mut(), DisableMouseCapture, LeaveAlternateScreen)?;
+    crossterm::execute!(
+        terminal.backend_mut(),
+        DisableMouseCapture,
+        LeaveAlternateScreen
+    )?;
     terminal.show_cursor()?;
     Ok(())
 }

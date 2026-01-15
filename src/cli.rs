@@ -34,6 +34,10 @@ pub struct CleanArgs {
     #[arg(long)]
     pub sudo: bool,
 
+    /// Internal: override the home directory for rule expansion.
+    #[arg(long, hide = true)]
+    pub user_home: Option<PathBuf>,
+
     /// Internal: path to a saved TUI state file.
     #[arg(long, hide = true)]
     pub tui_state: Option<PathBuf>,
