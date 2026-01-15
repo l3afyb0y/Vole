@@ -26,6 +26,7 @@ use crate::config::Rule;
 use crate::snapshot::SnapshotSupport;
 
 const OUTPUT_MAX_LINES: usize = 200;
+const OUTPUT_SCROLL_STEP: isize = 3;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PersistedState {
@@ -97,6 +98,7 @@ struct ActionHitboxes {
 #[derive(Debug, Default, Clone)]
 struct UiLayout {
     list_area: Option<Rect>,
+    output_area: Option<Rect>,
     actions: ActionHitboxes,
 }
 
@@ -117,6 +119,7 @@ struct AppState {
     home: PathBuf,
     output_lines: Vec<String>,
     output_truncated: bool,
+    output_scroll: usize,
 }
 
 impl AppState {
@@ -166,6 +169,7 @@ impl AppState {
             home,
             output_lines: Vec::new(),
             output_truncated: false,
+            output_scroll: 0,
         }
     }
 
@@ -235,6 +239,58 @@ impl AppState {
             .list_area
             .map(|rect| rect.height as usize)
             .unwrap_or_else(|| self.rules.len().max(1))
+    }
+
+    fn output_height(&self) -> usize {
+        self.layout
+            .output_area
+            .map(|rect| rect.height as usize)
+            .unwrap_or(0)
+    }
+
+    fn clamp_output_scroll(&mut self) {
+        let height = self.output_height();
+        if height == 0 || self.output_lines.is_empty() {
+            self.output_scroll = 0;
+            return;
+        }
+        let max_offset = self.output_lines.len().saturating_sub(height);
+        if self.output_scroll > max_offset {
+            self.output_scroll = max_offset;
+        }
+    }
+
+    fn scroll_output(&mut self, delta: isize) {
+        let height = self.output_height();
+        if height == 0 || self.output_lines.is_empty() {
+            self.output_scroll = 0;
+            return;
+        }
+        if self.output_lines.len() <= height {
+            self.output_scroll = 0;
+            return;
+        }
+        let max_offset = self.output_lines.len() - height;
+        let current = self.output_scroll as isize;
+        let next = (current + delta).clamp(0, max_offset as isize) as usize;
+        self.output_scroll = next;
+    }
+
+    fn scroll_output_page(&mut self, direction: isize) {
+        let height = self.output_height().max(1);
+        let step = height.saturating_sub(1).max(1) as isize;
+        let delta = if direction < 0 { -step } else { step };
+        self.scroll_output(delta);
+    }
+
+    fn scroll_output_to_top(&mut self) {
+        self.output_scroll = 0;
+    }
+
+    fn scroll_output_to_bottom(&mut self) {
+        let height = self.output_height();
+        let max_offset = self.output_lines.len().saturating_sub(height);
+        self.output_scroll = max_offset;
     }
 
     fn toggle_sudo(&mut self) {
@@ -396,6 +452,7 @@ impl AppState {
             self.output_truncated = false;
             self.output_lines = lines;
         }
+        self.output_scroll = self.output_lines.len();
     }
 
     fn run_dry_run(&mut self) {
@@ -549,6 +606,18 @@ fn handle_key(app: &mut AppState, key: KeyEvent) -> Result<Option<TuiExit>> {
         KeyCode::Char('a') => {
             begin_apply(app);
         }
+        KeyCode::PageUp => {
+            app.scroll_output_page(-1);
+        }
+        KeyCode::PageDown => {
+            app.scroll_output_page(1);
+        }
+        KeyCode::Home => {
+            app.scroll_output_to_top();
+        }
+        KeyCode::End => {
+            app.scroll_output_to_bottom();
+        }
         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             return Ok(Some(TuiExit::Quit));
         }
@@ -568,12 +637,16 @@ fn handle_mouse(app: &mut AppState, mouse: MouseEvent) -> Result<Option<TuiExit>
 
     match mouse.kind {
         MouseEventKind::ScrollDown => {
-            if in_list_area(app, col, row) {
+            if in_output_area(app, col, row) {
+                app.scroll_output(OUTPUT_SCROLL_STEP);
+            } else if in_list_area(app, col, row) {
                 app.move_selection(1);
             }
         }
         MouseEventKind::ScrollUp => {
-            if in_list_area(app, col, row) {
+            if in_output_area(app, col, row) {
+                app.scroll_output(-OUTPUT_SCROLL_STEP);
+            } else if in_list_area(app, col, row) {
                 app.move_selection(-1);
             }
         }
@@ -685,6 +758,13 @@ pub fn load_state(path: &Path) -> Result<PersistedState> {
 fn in_list_area(app: &AppState, col: u16, row: u16) -> bool {
     app.layout
         .list_area
+        .map(|rect| contains(rect, col, row))
+        .unwrap_or(false)
+}
+
+fn in_output_area(app: &AppState, col: u16, row: u16) -> bool {
+    app.layout
+        .output_area
         .map(|rect| contains(rect, col, row))
         .unwrap_or(false)
 }
@@ -855,6 +935,7 @@ fn draw_ui(frame: &mut ratatui::Frame<'_>, app: &mut AppState) {
     let mut help_spans = vec![Span::raw(
         "Keys: j/k or arrows move | space toggle | r rescan | ",
     )];
+    help_spans.push(Span::raw("PgUp/PgDn output | "));
     help_spans.push(Span::styled("d dry-run", Style::default().fg(Color::Green)));
     help_spans.push(Span::raw(" | "));
     help_spans.push(Span::styled("s sudo", Style::default().fg(Color::Red)));
@@ -869,7 +950,7 @@ fn draw_ui(frame: &mut ratatui::Frame<'_>, app: &mut AppState) {
     help_spans.push(Span::styled("a apply", Style::default().fg(Color::Red)));
     help_spans.push(Span::raw(" | q quit | "));
     help_spans.push(Span::styled(
-        "mouse: click, scroll",
+        "mouse: click, scroll list/output",
         Style::default().fg(Color::LightCyan),
     ));
     let status_block = Block::default().borders(Borders::ALL).title("Status");
@@ -889,20 +970,21 @@ fn draw_ui(frame: &mut ratatui::Frame<'_>, app: &mut AppState) {
     };
     let output_block = Block::default().borders(Borders::ALL).title(output_title);
     let output_inner = output_block.inner(chunks[2]);
+    app.layout.output_area = Some(output_inner);
     let height = output_inner.height as usize;
-    let mut output_lines = if app.output_lines.is_empty() {
-        vec![Line::from("No output yet.")]
+    app.clamp_output_scroll();
+    let output_widget = if app.output_lines.is_empty() {
+        Paragraph::new(vec![Line::from("No output yet.")]).block(output_block)
     } else {
-        app.output_lines
+        let max_offset = app.output_lines.len().saturating_sub(height);
+        let offset = app.output_scroll.min(max_offset);
+        let end = (offset + height).min(app.output_lines.len());
+        let lines = app.output_lines[offset..end]
             .iter()
             .map(|line| Line::from(line.as_str()))
-            .collect::<Vec<_>>()
+            .collect::<Vec<_>>();
+        Paragraph::new(lines).block(output_block)
     };
-    if height > 0 && output_lines.len() > height {
-        let start = output_lines.len().saturating_sub(height);
-        output_lines = output_lines.into_iter().skip(start).collect();
-    }
-    let output_widget = Paragraph::new(output_lines).block(output_block);
     frame.render_widget(output_widget, chunks[2]);
 
     let message = if app.confirm_apply && app.confirm_requires_delete {
