@@ -301,7 +301,7 @@ impl AppState {
     }
 
     fn jump_output_to_row(&mut self, row: u16) {
-        let Some(area) = self.layout.output_scrollbar_area else {
+        let Some(area) = self.layout.output_area else {
             return;
         };
         if self.output_lines.is_empty() || area.height == 0 {
@@ -313,7 +313,9 @@ impl AppState {
             return;
         }
         let max_offset = self.output_lines.len().saturating_sub(height);
-        let row_offset = row.saturating_sub(area.y) as usize;
+        let max_row = area.y.saturating_add(area.height.saturating_sub(1));
+        let clamped_row = row.clamp(area.y, max_row);
+        let row_offset = clamped_row.saturating_sub(area.y) as usize;
         if area.height == 1 {
             self.output_scroll = 0;
             return;
@@ -682,7 +684,7 @@ fn handle_mouse(app: &mut AppState, mouse: MouseEvent) -> Result<Option<TuiExit>
             }
         }
         MouseEventKind::Down(MouseButton::Left) => {
-            if in_scrollbar_area(app, col, row) {
+            if in_scrollbar_area(app, col, row) || in_output_area(app, col, row) {
                 app.jump_output_to_row(row);
                 return Ok((true, None));
             }
@@ -705,7 +707,7 @@ fn handle_mouse(app: &mut AppState, mouse: MouseEvent) -> Result<Option<TuiExit>
             }
         }
         MouseEventKind::Drag(MouseButton::Left) => {
-            if in_scrollbar_area(app, col, row) {
+            if in_scrollbar_area(app, col, row) || in_output_area(app, col, row) {
                 app.jump_output_to_row(row);
                 return Ok((true, None));
             }
