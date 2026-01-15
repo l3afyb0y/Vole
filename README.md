@@ -20,7 +20,7 @@ Vole focuses on safe cleanup first: default rules are conservative, browser cach
 ./install.sh
 ```
 
-This builds a release binary and installs it to `~/.local/bin/vole`. Make sure `~/.local/bin` is on your `PATH`.
+This builds a release binary and installs it to a user bin directory (prefers `~/bin` if it is on `PATH`, otherwise `~/.local/bin`).
 The install script will attempt to update your shell config automatically (bash, zsh, fish, or `~/.profile`).
 
 ### Cargo install

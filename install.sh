@@ -3,8 +3,8 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BIN_NAME="vole"
-PREFIX="${PREFIX:-$HOME/.local}"
-BIN_DIR="${BIN_DIR:-$PREFIX/bin}"
+PREFIX="${PREFIX:-}"
+BIN_DIR="${BIN_DIR:-}"
 CARGO="${CARGO:-cargo}"
 MARKER="# Added by Vole installer"
 
@@ -15,10 +15,29 @@ Usage: ./install.sh [--prefix <path>] [--bin-dir <path>]
 Builds Vole in release mode and installs the binary.
 
 Options:
-  --prefix <path>   Install prefix (default: ~/.local)
-  --bin-dir <path>  Override binary directory (default: <prefix>/bin)
+  --prefix <path>   Install prefix (default: auto-select bin dir)
+  --bin-dir <path>  Override binary directory (default: ~/bin or ~/.local/bin)
   -h, --help        Show this help
 EOF
+}
+
+default_bin_dir() {
+  local home_bin="$HOME/bin"
+  local local_bin="$HOME/.local/bin"
+
+  if [[ ":$PATH:" == *":$home_bin:"* ]]; then
+    echo "$home_bin"
+    return
+  fi
+  if [[ ":$PATH:" == *":$local_bin:"* ]]; then
+    echo "$local_bin"
+    return
+  fi
+  if [[ -d "$home_bin" ]]; then
+    echo "$home_bin"
+    return
+  fi
+  echo "$local_bin"
 }
 
 while [[ $# -gt 0 ]]; do
@@ -52,6 +71,14 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+if [[ -z "$BIN_DIR" ]]; then
+  if [[ -n "$PREFIX" ]]; then
+    BIN_DIR="$PREFIX/bin"
+  else
+    BIN_DIR="$(default_bin_dir)"
+  fi
+fi
+
 if ! command -v "$CARGO" >/dev/null 2>&1; then
   echo "cargo is required. Install Rust first: https://rustup.rs" >&2
   exit 1
@@ -62,7 +89,7 @@ ensure_path_bashlike() {
   if [[ ! -f "$rc" ]]; then
     touch "$rc"
   fi
-  if ! grep -Fq "$MARKER" "$rc"; then
+if ! grep -Fq "$MARKER" "$rc"; then
     cat >> "$rc" <<EOF
 $MARKER
 if [[ ":\$PATH:" != *":$BIN_DIR:"* ]]; then
@@ -85,7 +112,7 @@ ensure_path_fish() {
   if ! grep -Fq "$MARKER" "$rc"; then
     cat >> "$rc" <<EOF
 $MARKER
-if not contains "$BIN_DIR" \$PATH
+if not contains -- "$BIN_DIR" \$PATH
   set -gx PATH "$BIN_DIR" \$PATH
 end
 EOF
@@ -101,22 +128,22 @@ install -m 0755 "target/release/$BIN_NAME" "$BIN_DIR/$BIN_NAME"
 
 echo "Installed $BIN_NAME to $BIN_DIR/$BIN_NAME"
 
-shell_name="$(basename "${SHELL:-}")"
-case "$shell_name" in
-  bash)
-    ensure_path_bashlike "$HOME/.bashrc"
-    ;;
-  zsh)
-    ensure_path_bashlike "$HOME/.zshrc"
-    ;;
-  fish)
-    ensure_path_fish "$HOME/.config/fish/config.fish"
-    ;;
-  *)
-    ensure_path_bashlike "$HOME/.profile"
-    ;;
-esac
-
-if [[ ":\$PATH:" != *":$BIN_DIR:"* ]]; then
+if [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
+  shell_name="$(basename "${SHELL:-}")"
+  case "$shell_name" in
+    bash)
+      ensure_path_bashlike "$HOME/.bashrc"
+      ;;
+    zsh)
+      ensure_path_bashlike "$HOME/.zshrc"
+      ;;
+    fish)
+      ensure_path_fish "$HOME/.config/fish/config.fish"
+      ;;
+    *)
+      ensure_path_bashlike "$HOME/.profile"
+      ;;
+  esac
   export PATH="$BIN_DIR:$PATH"
+fi
 fi
