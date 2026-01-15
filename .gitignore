@@ -9,3 +9,4 @@ target/
 *.swo
 *.tmp
 .DS_Store
+.directory
