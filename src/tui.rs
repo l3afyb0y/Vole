@@ -25,7 +25,6 @@ use crate::clean::{dry_run_output, scan_rule, write_dry_run_report};
 use crate::config::Rule;
 use crate::snapshot::SnapshotSupport;
 
-const OUTPUT_MAX_LINES: usize = 200;
 const OUTPUT_SCROLL_STEP: isize = 3;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -124,7 +123,6 @@ struct AppState {
     layout: UiLayout,
     home: PathBuf,
     output_lines: Vec<String>,
-    output_truncated: bool,
     output_scroll: usize,
 }
 
@@ -174,7 +172,6 @@ impl AppState {
             layout: UiLayout::default(),
             home,
             output_lines: Vec::new(),
-            output_truncated: false,
             output_scroll: 0,
         }
     }
@@ -451,13 +448,7 @@ impl AppState {
     }
 
     fn set_output_lines(&mut self, lines: Vec<String>) {
-        if lines.len() > OUTPUT_MAX_LINES {
-            self.output_truncated = true;
-            self.output_lines = lines[lines.len() - OUTPUT_MAX_LINES..].to_vec();
-        } else {
-            self.output_truncated = false;
-            self.output_lines = lines;
-        }
+        self.output_lines = lines;
         self.output_scroll = self.output_lines.len();
     }
 
@@ -1006,11 +997,7 @@ fn draw_ui(frame: &mut ratatui::Frame<'_>, app: &mut AppState) {
     .block(status_block);
     frame.render_widget(summary_block, chunks[1]);
 
-    let output_title = if app.output_truncated {
-        format!("Output (last {} lines)", OUTPUT_MAX_LINES)
-    } else {
-        "Output".to_string()
-    };
+    let output_title = "Output".to_string();
     let output_block = Block::default().borders(Borders::ALL).title(output_title);
     let output_inner = output_block.inner(chunks[2]);
     app.layout.output_area = Some(output_inner);
