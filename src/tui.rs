@@ -95,6 +95,12 @@ struct ActionHitboxes {
     snapshot: Option<Rect>,
 }
 
+#[derive(Debug, Clone)]
+struct ActionLine {
+    text: String,
+    spans: Vec<Span<'static>>,
+}
+
 #[derive(Debug, Default, Clone)]
 struct UiLayout {
     list_area: Option<Rect>,
@@ -606,6 +612,9 @@ fn handle_key(app: &mut AppState, key: KeyEvent) -> Result<Option<TuiExit>> {
         KeyCode::Char('a') => {
             begin_apply(app);
         }
+        KeyCode::Enter => {
+            begin_apply(app);
+        }
         KeyCode::PageUp => {
             app.scroll_output_page(-1);
         }
@@ -773,11 +782,13 @@ fn contains(rect: Rect, col: u16, row: u16) -> bool {
     col >= rect.x && col < rect.x + rect.width && row >= rect.y && row < rect.y + rect.height
 }
 
-fn build_action_line(area: Rect, app: &AppState) -> (String, ActionHitboxes) {
+fn build_action_line(area: Rect, app: &AppState) -> (ActionLine, ActionHitboxes) {
     let block = Block::default().borders(Borders::ALL).title("Status");
     let inner = block.inner(area);
 
+    let base_style = Style::default().fg(Color::Blue);
     let mut line = String::from("Actions: ");
+    let mut spans = vec![Span::styled("Actions: ", base_style)];
     let mut hitboxes = ActionHitboxes::default();
 
     let mut cursor = line.len() as u16;
@@ -796,25 +807,31 @@ fn build_action_line(area: Rect, app: &AppState) -> (String, ActionHitboxes) {
     };
 
     cursor = push_button(&mut line, inner, cursor, apply_label, &mut hitboxes.apply);
+    spans.push(Span::styled(apply_label.to_string(), base_style));
     if !apply_enabled {
         hitboxes.apply = None;
     }
     line.push(' ');
     cursor += 1;
+    spans.push(Span::styled(" ", base_style));
     cursor = push_button(&mut line, inner, cursor, dry_label, &mut hitboxes.dry_run);
+    spans.push(Span::styled(dry_label.to_string(), base_style));
 
     line.push(' ');
     cursor += 1;
+    spans.push(Span::styled(" ", base_style));
     let sudo_label = if app.include_sudo {
         "[Sudo: ON]"
     } else {
         "[Sudo: OFF]"
     };
     cursor = push_button(&mut line, inner, cursor, sudo_label, &mut hitboxes.sudo);
+    spans.extend(sudo_status_spans(app.include_sudo, base_style, true));
 
     if app.snapshot_support.is_some() {
         line.push(' ');
         cursor += 1;
+        spans.push(Span::styled(" ", base_style));
         let snapshot_label = if app.snapshot_enabled {
             "[Snapshot: ON]"
         } else {
@@ -827,9 +844,33 @@ fn build_action_line(area: Rect, app: &AppState) -> (String, ActionHitboxes) {
             snapshot_label,
             &mut hitboxes.snapshot,
         );
+        spans.push(Span::styled(snapshot_label.to_string(), base_style));
     }
 
-    (line, hitboxes)
+    (ActionLine { text: line, spans }, hitboxes)
+}
+
+fn sudo_status_spans(sudo_on: bool, base_style: Style, bracketed: bool) -> Vec<Span<'static>> {
+    let sudo_style = Style::default().fg(Color::Red);
+    let status_style = if sudo_on {
+        Style::default().fg(Color::Red)
+    } else {
+        Style::default().fg(Color::Green)
+    };
+    let mut spans = Vec::new();
+    if bracketed {
+        spans.push(Span::styled("[", base_style));
+    }
+    spans.push(Span::styled("Sudo:", sudo_style));
+    spans.push(Span::styled(" ", base_style));
+    spans.push(Span::styled(
+        if sudo_on { "ON" } else { "OFF" },
+        status_style,
+    ));
+    if bracketed {
+        spans.push(Span::styled("]", base_style));
+    }
+    spans
 }
 
 fn push_button(
@@ -913,21 +954,20 @@ fn draw_ui(frame: &mut ratatui::Frame<'_>, app: &mut AppState) {
         format_size(bytes, BINARY),
         entries
     );
-    let mode = if let Some(support) = &app.snapshot_support {
-        let snapshot_status = format!("{} ({})", on_off(app.snapshot_enabled), support.label);
-        format!(
-            "Dry-run: {} | Sudo: {} | Snapshot: {}",
-            on_off(app.dry_run),
-            on_off(app.include_sudo),
-            snapshot_status
-        )
-    } else {
-        format!(
-            "Dry-run: {} | Sudo: {}",
-            on_off(app.dry_run),
-            on_off(app.include_sudo)
-        )
-    };
+    let base_mode = Style::default().fg(Color::LightBlue);
+    let mut mode_spans = Vec::new();
+    mode_spans.push(Span::styled("Dry-run: ", base_mode));
+    mode_spans.push(Span::styled(on_off(app.dry_run), base_mode));
+    mode_spans.push(Span::styled(" | ", base_mode));
+    mode_spans.extend(sudo_status_spans(app.include_sudo, base_mode, false));
+    if let Some(support) = &app.snapshot_support {
+        mode_spans.push(Span::styled(" | Snapshot: ", base_mode));
+        mode_spans.push(Span::styled(on_off(app.snapshot_enabled), base_mode));
+        mode_spans.push(Span::styled(" (", base_mode));
+        mode_spans.push(Span::styled(support.label.to_string(), base_mode));
+        mode_spans.push(Span::styled(")", base_mode));
+    }
+    let mode_line = Line::from(mode_spans);
 
     let (action_line, actions) = build_action_line(chunks[1], app);
     app.layout.actions = actions;
@@ -947,7 +987,10 @@ fn draw_ui(frame: &mut ratatui::Frame<'_>, app: &mut AppState) {
         ));
     }
     help_spans.push(Span::raw(" | "));
-    help_spans.push(Span::styled("a apply", Style::default().fg(Color::Red)));
+    help_spans.push(Span::styled(
+        "a/enter apply",
+        Style::default().fg(Color::Red),
+    ));
     help_spans.push(Span::raw(" | q quit | "));
     help_spans.push(Span::styled(
         "mouse: click, scroll list/output",
@@ -956,8 +999,8 @@ fn draw_ui(frame: &mut ratatui::Frame<'_>, app: &mut AppState) {
     let status_block = Block::default().borders(Borders::ALL).title("Status");
     let summary_block = Paragraph::new(vec![
         Line::styled(summary, Style::default().fg(Color::Cyan)),
-        Line::styled(mode, Style::default().fg(Color::LightBlue)),
-        Line::styled(action_line, Style::default().fg(Color::Blue)),
+        mode_line,
+        Line::from(action_line.spans),
         Line::from(help_spans),
     ])
     .block(status_block);
