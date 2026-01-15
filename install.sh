@@ -6,6 +6,7 @@ BIN_NAME="vole"
 PREFIX="${PREFIX:-$HOME/.local}"
 BIN_DIR="${BIN_DIR:-$PREFIX/bin}"
 CARGO="${CARGO:-cargo}"
+MARKER="# Added by Vole installer"
 
 usage() {
   cat <<'EOF'
@@ -56,6 +57,41 @@ if ! command -v "$CARGO" >/dev/null 2>&1; then
   exit 1
 fi
 
+ensure_path_bashlike() {
+  local rc="$1"
+  if [[ ! -f "$rc" ]]; then
+    touch "$rc"
+  fi
+  if ! grep -Fq "$MARKER" "$rc"; then
+    cat >> "$rc" <<EOF
+$MARKER
+if [[ ":\$PATH:" != *":$BIN_DIR:"* ]]; then
+  export PATH="$BIN_DIR:\$PATH"
+fi
+EOF
+  fi
+}
+
+ensure_path_fish() {
+  local rc="$1"
+  local rc_dir
+  rc_dir="$(dirname "$rc")"
+  if [[ ! -d "$rc_dir" ]]; then
+    mkdir -p "$rc_dir"
+  fi
+  if [[ ! -f "$rc" ]]; then
+    touch "$rc"
+  fi
+  if ! grep -Fq "$MARKER" "$rc"; then
+    cat >> "$rc" <<EOF
+$MARKER
+if not contains "$BIN_DIR" \$PATH
+  set -gx PATH "$BIN_DIR" \$PATH
+end
+EOF
+  fi
+}
+
 echo "Building Vole (release)..."
 cd "$ROOT_DIR"
 "$CARGO" build --release
@@ -64,6 +100,23 @@ mkdir -p "$BIN_DIR"
 install -m 0755 "target/release/$BIN_NAME" "$BIN_DIR/$BIN_NAME"
 
 echo "Installed $BIN_NAME to $BIN_DIR/$BIN_NAME"
-if ! command -v "$BIN_NAME" >/dev/null 2>&1; then
-  echo "Add $BIN_DIR to your PATH to use '$BIN_NAME' directly."
+
+shell_name="$(basename "${SHELL:-}")"
+case "$shell_name" in
+  bash)
+    ensure_path_bashlike "$HOME/.bashrc"
+    ;;
+  zsh)
+    ensure_path_bashlike "$HOME/.zshrc"
+    ;;
+  fish)
+    ensure_path_fish "$HOME/.config/fish/config.fish"
+    ;;
+  *)
+    ensure_path_bashlike "$HOME/.profile"
+    ;;
+esac
+
+if [[ ":\$PATH:" != *":$BIN_DIR:"* ]]; then
+  export PATH="$BIN_DIR:$PATH"
 fi
