@@ -2,6 +2,7 @@ mod clean;
 mod cli;
 mod config;
 mod distro;
+mod options;
 mod snapshot;
 mod tui;
 
@@ -14,8 +15,9 @@ use humansize::{format_size, BINARY};
 
 use crate::clean::scan_rules;
 use crate::cli::{CleanArgs, Cli, Commands};
-use crate::config::Config;
+use crate::config::{Config, RuleKind};
 use crate::distro::Distro;
+use crate::options::{DownloadsChoice, ScanOptions};
 use crate::snapshot::SnapshotSupport;
 
 fn main() -> Result<()> {
@@ -128,7 +130,9 @@ fn run_clean_cli(
         return Ok(());
     }
 
-    let scans = scan_rules(&rules);
+    let downloads_choice = resolve_downloads_choice(&rules, args)?;
+    let scan_options = ScanOptions { downloads_choice };
+    let scans = scan_rules(&rules, &scan_options);
     print_plan(&scans);
 
     if args.effective_dry_run() {
@@ -198,6 +202,23 @@ fn print_plan(scans: &[crate::clean::RuleScan]) {
     );
 }
 
+fn resolve_downloads_choice(
+    rules: &[crate::config::Rule],
+    args: &CleanArgs,
+) -> Result<Option<DownloadsChoice>> {
+    let has_downloads = rules.iter().any(|rule| rule.kind == RuleKind::Downloads);
+    if !has_downloads {
+        return Ok(None);
+    }
+    if let Some(choice) = args.downloads_remove {
+        return Ok(Some(choice.into()));
+    }
+    if args.yes {
+        bail!("Downloads cleanup requires --downloads-remove when using --yes");
+    }
+    Ok(Some(prompt_downloads_choice()?))
+}
+
 fn emit_dry_run(
     scans: &[crate::clean::RuleScan],
     home: &Path,
@@ -244,12 +265,36 @@ fn confirm(requires_sudo: bool) -> Result<bool> {
     Ok(input == "y" || input == "yes")
 }
 
+fn prompt_downloads_choice() -> Result<DownloadsChoice> {
+    loop {
+        print!("Downloads cleanup: remove archives or folders? [a/f]: ");
+        io::stdout().flush().ok();
+        let mut input = String::new();
+        io::stdin().read_line(&mut input)?;
+        let input = input.trim().to_ascii_lowercase();
+        match input.as_str() {
+            "a" | "archive" | "archives" => return Ok(DownloadsChoice::Archives),
+            "f" | "folder" | "folders" => return Ok(DownloadsChoice::Folders),
+            "" => continue,
+            _ => println!("Please enter 'a' for archives or 'f' for folders."),
+        }
+    }
+}
+
 fn handle_tui(exit: tui::TuiExit) -> Result<()> {
     match exit {
         tui::TuiExit::Quit => Ok(()),
         tui::TuiExit::ReexecSudo { args } => reexec_with_sudo(&args),
-        tui::TuiExit::Apply { rules, snapshot } => {
-            let scans = rules.iter().map(clean::scan_rule).collect::<Vec<_>>();
+        tui::TuiExit::Apply {
+            rules,
+            snapshot,
+            downloads_choice,
+        } => {
+            let scan_options = ScanOptions { downloads_choice };
+            let scans = rules
+                .iter()
+                .map(|rule| clean::scan_rule(rule, &scan_options))
+                .collect::<Vec<_>>();
             if let Some(support) = snapshot {
                 let outcome = snapshot::create_snapshot(&support)?;
                 println!("{}", outcome.display());
@@ -288,6 +333,10 @@ fn build_sudo_args(cli: &Cli, args: &CleanArgs, home: &Path) -> Result<Vec<Strin
     sudo_args.push(home.to_string_lossy().to_string());
     if args.dry_run {
         sudo_args.push("--dry-run".to_string());
+    }
+    if let Some(choice) = args.downloads_remove {
+        sudo_args.push("--downloads-remove".to_string());
+        sudo_args.push(DownloadsChoice::from(choice).to_string());
     }
     if args.snapshot {
         sudo_args.push("--snapshot".to_string());

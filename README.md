@@ -10,6 +10,7 @@ Vole focuses on safe cleanup first: default rules are conservative, browser cach
 - Safe defaults: user-only cleanup by default, with optional sudo mode.
 - Dry-run toggle: preview without deleting via `--dry-run` or the TUI (shown in the TUI Output panel and saved to `~/vole-dry-run.txt`).
 - Distro-aware rules: Arch first-class, then Fedora, then Ubuntu/Debian.
+- Downloads cleanup: detects archives with matching extracted folders in `~/Downloads` and lets you choose which side to remove.
 - Snapshot gating: snapshot option only appears if a supported provider is detected.
 
 ## Install
@@ -50,11 +51,15 @@ Keys:
 - `q`: quit
 - Mouse: click to toggle, scroll to move, click/drag in output to jump
 
+When Downloads Cleanup is enabled, apply will prompt you to remove archives or the extracted folders.
+
 ### CLI
 
 ```bash
 vole clean --dry-run
 vole clean --sudo
+vole clean --downloads-remove archives
+vole clean --downloads-remove folders
 vole clean --rule user-trash --rule thumbnails
 vole clean --list-rules
 ```

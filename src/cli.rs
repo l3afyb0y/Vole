@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
+
+use crate::options::DownloadsChoice;
 
 #[derive(Parser, Debug)]
 #[command(name = "vole")]
@@ -20,6 +22,13 @@ pub enum Commands {
     Clean(CleanArgs),
 }
 
+#[derive(ValueEnum, Debug, Clone, Copy)]
+#[clap(rename_all = "kebab-case")]
+pub enum DownloadsRemove {
+    Archives,
+    Folders,
+}
+
 #[derive(Args, Debug, Clone)]
 pub struct CleanArgs {
     /// Launch the interactive TUI instead of the CLI flow.
@@ -29,6 +38,10 @@ pub struct CleanArgs {
     /// Preview cleanup without deleting (writes ~/vole-dry-run.txt).
     #[arg(long)]
     pub dry_run: bool,
+
+    /// For Downloads cleanup, remove either archives or matching folders.
+    #[arg(long, value_enum)]
+    pub downloads_remove: Option<DownloadsRemove>,
 
     /// Include system rules that require sudo/root.
     #[arg(long)]
@@ -62,5 +75,14 @@ pub struct CleanArgs {
 impl CleanArgs {
     pub fn effective_dry_run(&self) -> bool {
         self.dry_run
+    }
+}
+
+impl From<DownloadsRemove> for DownloadsChoice {
+    fn from(value: DownloadsRemove) -> Self {
+        match value {
+            DownloadsRemove::Archives => DownloadsChoice::Archives,
+            DownloadsRemove::Folders => DownloadsChoice::Folders,
+        }
     }
 }

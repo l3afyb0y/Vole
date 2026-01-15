@@ -1,3 +1,4 @@
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -6,7 +7,8 @@ use anyhow::{Context, Result};
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use walkdir::{DirEntry, WalkDir};
 
-use crate::config::Rule;
+use crate::config::{Rule, RuleKind};
+use crate::options::{DownloadsChoice, ScanOptions};
 
 #[derive(Debug, Clone)]
 pub struct RuleScan {
@@ -40,8 +42,12 @@ pub struct DryRunOutput {
     pub details: String,
 }
 
-pub fn scan_rules(rules: &[Rule]) -> Vec<RuleScan> {
-    rules.iter().map(scan_rule).collect()
+const ARCHIVE_EXTENSIONS: [&str; 7] = [
+    ".tar.gz", ".tgz", ".tar.xz", ".tar.zst", ".zip", ".7z", ".rar",
+];
+
+pub fn scan_rules(rules: &[Rule], options: &ScanOptions) -> Vec<RuleScan> {
+    rules.iter().map(|rule| scan_rule(rule, options)).collect()
 }
 
 pub fn apply(scans: &[RuleScan]) -> CleanReport {
@@ -124,7 +130,14 @@ pub fn write_dry_run_report(home: &Path, details: &str) -> Result<PathBuf> {
     Ok(path)
 }
 
-pub fn scan_rule(rule: &Rule) -> RuleScan {
+pub fn scan_rule(rule: &Rule, options: &ScanOptions) -> RuleScan {
+    match rule.kind {
+        RuleKind::Paths => scan_paths_rule(rule),
+        RuleKind::Downloads => scan_downloads_rule(rule, options.downloads_choice),
+    }
+}
+
+fn scan_paths_rule(rule: &Rule) -> RuleScan {
     let mut scan = RuleScan {
         rule: rule.clone(),
         bytes: 0,
@@ -147,6 +160,130 @@ pub fn scan_rule(rule: &Rule) -> RuleScan {
     }
 
     scan
+}
+
+fn scan_downloads_rule(rule: &Rule, choice: Option<DownloadsChoice>) -> RuleScan {
+    let mut scan = RuleScan {
+        rule: rule.clone(),
+        bytes: 0,
+        entries: 0,
+        files: Vec::new(),
+        dirs: Vec::new(),
+        errors: 0,
+    };
+
+    let Some(choice) = choice else {
+        return scan;
+    };
+
+    for root in rule.expanded_paths() {
+        let meta = match fs::symlink_metadata(&root) {
+            Ok(meta) => meta,
+            Err(_) => {
+                scan.errors += 1;
+                continue;
+            }
+        };
+        if meta.file_type().is_symlink() || !meta.is_dir() {
+            continue;
+        }
+
+        let entries = match fs::read_dir(&root) {
+            Ok(entries) => entries,
+            Err(_) => {
+                scan.errors += 1;
+                continue;
+            }
+        };
+
+        let mut archives: Vec<(String, PathBuf, u64)> = Vec::new();
+        let mut folders: HashMap<String, PathBuf> = HashMap::new();
+
+        for entry in entries {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(_) => {
+                    scan.errors += 1;
+                    continue;
+                }
+            };
+            let path = entry.path();
+            let name = match entry.file_name().to_str() {
+                Some(name) => name.to_string(),
+                None => {
+                    scan.errors += 1;
+                    continue;
+                }
+            };
+            let file_type = match entry.file_type() {
+                Ok(file_type) => file_type,
+                Err(_) => {
+                    scan.errors += 1;
+                    continue;
+                }
+            };
+            if file_type.is_symlink() {
+                continue;
+            }
+            if file_type.is_dir() {
+                folders.insert(name, path);
+                continue;
+            }
+            if !file_type.is_file() {
+                continue;
+            }
+            let Some(base) = archive_base_name(&name) else {
+                continue;
+            };
+            let size = match entry.metadata() {
+                Ok(meta) => meta.len(),
+                Err(_) => {
+                    scan.errors += 1;
+                    continue;
+                }
+            };
+            archives.push((base, path, size));
+        }
+
+        let mut seen_dirs: HashSet<PathBuf> = HashSet::new();
+
+        for (base, archive_path, size) in archives {
+            let Some(dir_path) = folders.get(&base) else {
+                continue;
+            };
+            match choice {
+                DownloadsChoice::Archives => {
+                    scan.entries += 1;
+                    scan.bytes += size;
+                    scan.files.push(archive_path);
+                }
+                DownloadsChoice::Folders => {
+                    if seen_dirs.insert(dir_path.clone()) {
+                        if let Err(errors) = scan_root(dir_path, None, &mut scan) {
+                            scan.errors += errors;
+                        }
+                        scan.dirs.push(dir_path.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    scan
+}
+
+fn archive_base_name(file_name: &str) -> Option<String> {
+    let lower = file_name.to_ascii_lowercase();
+    for ext in ARCHIVE_EXTENSIONS {
+        if lower.ends_with(ext) {
+            let base_len = file_name.len().saturating_sub(ext.len());
+            if base_len == 0 {
+                return None;
+            }
+            return Some(file_name[..base_len].to_string());
+        }
+    }
+    None
 }
 
 fn scan_root(root: &Path, exclude: Option<&GlobSet>, scan: &mut RuleScan) -> Result<(), usize> {

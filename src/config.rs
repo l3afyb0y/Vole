@@ -21,6 +21,8 @@ pub struct Rule {
     pub id: String,
     pub label: String,
     #[serde(default)]
+    pub kind: RuleKind,
+    #[serde(default)]
     pub description: Option<String>,
     #[serde(default)]
     pub paths: Vec<String>,
@@ -32,6 +34,19 @@ pub struct Rule {
     pub distros: Vec<String>,
     #[serde(default)]
     pub exclude_globs: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RuleKind {
+    Paths,
+    Downloads,
+}
+
+impl Default for RuleKind {
+    fn default() -> Self {
+        RuleKind::Paths
+    }
 }
 
 impl Config {

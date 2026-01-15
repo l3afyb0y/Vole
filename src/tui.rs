@@ -25,7 +25,8 @@ use serde::{Deserialize, Serialize};
 use serde_json;
 
 use crate::clean::{dry_run_output, scan_rule, write_dry_run_report};
-use crate::config::Rule;
+use crate::config::{Rule, RuleKind};
+use crate::options::{DownloadsChoice, ScanOptions};
 use crate::snapshot::SnapshotSupport;
 
 const OUTPUT_SCROLL_STEP: isize = 3;
@@ -37,6 +38,8 @@ pub struct PersistedState {
     pub dry_run: bool,
     pub snapshot_enabled: bool,
     pub include_sudo: bool,
+    #[serde(default)]
+    pub downloads_choice: Option<DownloadsChoice>,
 }
 
 pub fn run(
@@ -77,6 +80,7 @@ pub enum TuiExit {
     Apply {
         rules: Vec<Rule>,
         snapshot: Option<SnapshotSupport>,
+        downloads_choice: Option<DownloadsChoice>,
     },
     ReexecSudo {
         args: Vec<String>,
@@ -122,12 +126,14 @@ struct AppState {
     confirm_apply: bool,
     confirm_requires_delete: bool,
     confirm_buffer: String,
+    confirm_downloads_choice: bool,
     message: Option<String>,
     sudo_reexec_args: Option<Vec<String>>,
     layout: UiLayout,
     home: PathBuf,
     output_lines: Vec<String>,
     output_scroll: usize,
+    downloads_choice: Option<DownloadsChoice>,
 }
 
 impl AppState {
@@ -171,24 +177,33 @@ impl AppState {
             confirm_apply: false,
             confirm_requires_delete: false,
             confirm_buffer: String::new(),
+            confirm_downloads_choice: false,
             message: None,
             sudo_reexec_args,
             layout: UiLayout::default(),
             home,
             output_lines: Vec::new(),
             output_scroll: 0,
+            downloads_choice: None,
         }
     }
 
     fn rescan_with_message(&mut self, message: Option<String>) {
+        let options = self.scan_options();
         for state in &mut self.rules {
             if state.rule.requires_sudo && (!self.include_sudo || !self.is_root) {
                 state.scan = None;
                 continue;
             }
-            state.scan = Some(scan_rule(&state.rule));
+            state.scan = Some(scan_rule(&state.rule, &options));
         }
         self.message = message;
+    }
+
+    fn scan_options(&self) -> ScanOptions {
+        ScanOptions {
+            downloads_choice: self.downloads_choice,
+        }
     }
 
     fn toggle_selected(&mut self) {
@@ -203,6 +218,15 @@ impl AppState {
                 self.message = Some("Requires sudo; restart as root to enable".to_string());
             } else {
                 state.enabled = !state.enabled;
+                if !state.enabled && state.rule.kind == RuleKind::Downloads {
+                    if !self
+                        .rules
+                        .iter()
+                        .any(|rule| rule.enabled && rule.rule.kind == RuleKind::Downloads)
+                    {
+                        self.downloads_choice = None;
+                    }
+                }
             }
         }
     }
@@ -397,6 +421,14 @@ impl AppState {
             .collect()
     }
 
+    fn downloads_choice_required(&self) -> bool {
+        self.downloads_choice.is_none()
+            && self
+                .rules
+                .iter()
+                .any(|rule| rule.enabled && rule.rule.kind == RuleKind::Downloads)
+    }
+
     fn apply_state(&mut self, state: &PersistedState) {
         self.include_sudo = self.is_root && state.include_sudo;
         self.dry_run = if self.include_sudo {
@@ -404,6 +436,7 @@ impl AppState {
         } else {
             state.dry_run
         };
+        self.downloads_choice = state.downloads_choice;
         self.snapshot_enabled =
             state.snapshot_enabled && self.snapshot_support.is_some() && self.include_sudo;
         self.apply_enabled_rules(&state.enabled_rules, state.selected_rule.as_deref());
@@ -425,6 +458,7 @@ impl AppState {
             dry_run: self.dry_run,
             snapshot_enabled: self.snapshot_enabled,
             include_sudo: self.include_sudo,
+            downloads_choice: self.downloads_choice,
         }
     }
 
@@ -539,6 +573,29 @@ fn run_app(
 }
 
 fn handle_key(app: &mut AppState, key: KeyEvent) -> Result<Option<TuiExit>> {
+    if app.confirm_downloads_choice {
+        match key.code {
+            KeyCode::Char('a') | KeyCode::Char('A') => {
+                app.downloads_choice = Some(DownloadsChoice::Archives);
+                app.confirm_downloads_choice = false;
+                app.rescan_with_message(Some("Downloads choice set: remove archives".to_string()));
+                begin_apply(app);
+            }
+            KeyCode::Char('f') | KeyCode::Char('F') => {
+                app.downloads_choice = Some(DownloadsChoice::Folders);
+                app.confirm_downloads_choice = false;
+                app.rescan_with_message(Some("Downloads choice set: remove folders".to_string()));
+                begin_apply(app);
+            }
+            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                app.confirm_downloads_choice = false;
+                app.message = Some("Downloads cleanup canceled".to_string());
+            }
+            _ => {}
+        }
+        return Ok(None);
+    }
+
     if app.confirm_apply {
         if app.confirm_requires_delete {
             match key.code {
@@ -555,7 +612,11 @@ fn handle_key(app: &mut AppState, key: KeyEvent) -> Result<Option<TuiExit>> {
                         } else {
                             None
                         };
-                        return Ok(Some(TuiExit::Apply { rules, snapshot }));
+                        return Ok(Some(TuiExit::Apply {
+                            rules,
+                            snapshot,
+                            downloads_choice: app.downloads_choice,
+                        }));
                     }
                     app.message = Some("Type DELETE to confirm".to_string());
                     app.confirm_buffer.clear();
@@ -590,7 +651,11 @@ fn handle_key(app: &mut AppState, key: KeyEvent) -> Result<Option<TuiExit>> {
                     } else {
                         None
                     };
-                    return Ok(Some(TuiExit::Apply { rules, snapshot }));
+                    return Ok(Some(TuiExit::Apply {
+                        rules,
+                        snapshot,
+                        downloads_choice: app.downloads_choice,
+                    }));
                 }
                 KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
                     app.confirm_apply = false;
@@ -661,7 +726,7 @@ fn handle_key(app: &mut AppState, key: KeyEvent) -> Result<Option<TuiExit>> {
 }
 
 fn handle_mouse(app: &mut AppState, mouse: MouseEvent) -> Result<Option<TuiExit>> {
-    if app.confirm_apply {
+    if app.confirm_apply || app.confirm_downloads_choice {
         return Ok(None);
     }
 
@@ -721,6 +786,11 @@ fn handle_mouse(app: &mut AppState, mouse: MouseEvent) -> Result<Option<TuiExit>
 fn begin_apply(app: &mut AppState) {
     if app.selected_rules().is_empty() {
         app.message = Some("No rules selected".to_string());
+    } else if app.downloads_choice_required() {
+        app.confirm_downloads_choice = true;
+        app.confirm_apply = false;
+        app.confirm_requires_delete = false;
+        app.confirm_buffer.clear();
     } else if app.snapshot_enabled && app.dry_run {
         app.message = Some("Disable dry-run to create snapshots".to_string());
     } else if app.snapshot_enabled && !app.include_sudo {
@@ -965,11 +1035,18 @@ fn draw_ui(frame: &mut ratatui::Frame<'_>, app: &mut AppState) {
             } else {
                 ""
             };
-            let size = state
-                .scan
-                .as_ref()
-                .map(|scan| format!("{} / {}", format_size(scan.bytes, BINARY), scan.entries))
-                .unwrap_or_else(|| "-".to_string());
+            let size = if state.rule.kind == RuleKind::Downloads
+                && state.enabled
+                && app.downloads_choice.is_none()
+            {
+                "choose at apply".to_string()
+            } else {
+                state
+                    .scan
+                    .as_ref()
+                    .map(|scan| format!("{} / {}", format_size(scan.bytes, BINARY), scan.entries))
+                    .unwrap_or_else(|| "-".to_string())
+            };
             let content = format!("[{}] {}{}  {}", enabled, state.rule.label, sudo, size);
             ListItem::new(Line::from(content))
         })
@@ -1007,6 +1084,18 @@ fn draw_ui(frame: &mut ratatui::Frame<'_>, app: &mut AppState) {
         mode_spans.push(Span::styled(" (", base_mode));
         mode_spans.push(Span::styled(support.label.to_string(), base_mode));
         mode_spans.push(Span::styled(")", base_mode));
+    }
+    if app
+        .rules
+        .iter()
+        .any(|rule| rule.enabled && rule.rule.kind == RuleKind::Downloads)
+    {
+        mode_spans.push(Span::styled(" | Downloads: ", base_mode));
+        if let Some(choice) = app.downloads_choice {
+            mode_spans.push(Span::styled(choice.as_str(), base_mode));
+        } else {
+            mode_spans.push(Span::styled("CHOOSE", Style::default().fg(Color::Yellow)));
+        }
     }
     let mode_line = Line::from(mode_spans);
 
@@ -1096,7 +1185,9 @@ fn draw_ui(frame: &mut ratatui::Frame<'_>, app: &mut AppState) {
         frame.render_stateful_widget(scrollbar, area, &mut state);
     }
 
-    let message = if app.confirm_apply && app.confirm_requires_delete {
+    let message = if app.confirm_downloads_choice {
+        "Downloads cleanup: remove archives or folders? (a/f)".to_string()
+    } else if app.confirm_apply && app.confirm_requires_delete {
         if app.confirm_buffer.is_empty() {
             "Sudo mode: type DELETE to confirm".to_string()
         } else {

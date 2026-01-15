@@ -65,6 +65,16 @@
       "enabled_by_default": true
     },
     {
+      "id": "downloads-archives",
+      "label": "Downloads Cleanup",
+      "kind": "downloads",
+      "description": "Find archives with matching extracted folders in ~/Downloads and remove the chosen side.",
+      "paths": [
+        "~/Downloads"
+      ],
+      "enabled_by_default": true
+    },
+    {
       "id": "dev-pip-cache",
       "label": "Python Pip Cache",
       "description": "Downloaded wheels and build cache.",
