@@ -44,29 +44,35 @@ fn main() -> Result<()> {
             if args.tui {
                 let sudo_reexec = build_tui_sudo_reexec(&cli, &home)?;
                 let tui_state = load_tui_state(args.tui_state.as_deref())?;
-                return handle_tui(tui::run(
-                    config.available_rules(&distro),
-                    snapshot_support,
-                    is_root,
-                    args.sudo,
-                    args.dry_run,
-                    sudo_reexec,
-                    tui_state,
-                )?);
+                return handle_tui(
+                    tui::run(
+                        config.available_rules(&distro),
+                        snapshot_support,
+                        is_root,
+                        args.sudo,
+                        args.dry_run,
+                        sudo_reexec,
+                        tui_state,
+                    )?,
+                    &home,
+                );
             }
-            run_clean_cli(&config, &distro, args, snapshot_support, is_root)
+            run_clean_cli(&config, &distro, args, snapshot_support, is_root, &home)
         }
         None => {
             let sudo_reexec = build_tui_sudo_reexec(&cli, &home)?;
-            handle_tui(tui::run(
-                config.available_rules(&distro),
-                snapshot_support,
-                is_root,
-                false,
-                false,
-                sudo_reexec,
-                None,
-            )?)
+            handle_tui(
+                tui::run(
+                    config.available_rules(&distro),
+                    snapshot_support,
+                    is_root,
+                    false,
+                    false,
+                    sudo_reexec,
+                    None,
+                )?,
+                &home,
+            )
         }
     }
 }
@@ -77,6 +83,7 @@ fn run_clean_cli(
     args: &CleanArgs,
     snapshot_support: Option<SnapshotSupport>,
     is_root: bool,
+    home: &Path,
 ) -> Result<()> {
     let available_rules = config.available_rules(distro);
 
@@ -129,18 +136,7 @@ fn run_clean_cli(
     print_plan(&scans);
 
     if args.effective_dry_run() {
-        let report = clean::dry_run(&scans);
-        println!(
-            "Dry-run listed {} files and {} directories",
-            report.files_listed, report.dirs_listed
-        );
-        println!("Would free {}", format_size(report.bytes_listed, BINARY));
-        if args.snapshot {
-            println!("Snapshot skipped in dry-run.");
-        }
-        if report.errors > 0 {
-            println!("Errors encountered: {}", report.errors);
-        }
+        emit_dry_run(&scans, home, args.snapshot)?;
         return Ok(());
     }
 
@@ -206,6 +202,42 @@ fn print_plan(scans: &[crate::clean::RuleScan]) {
     );
 }
 
+fn emit_dry_run(
+    scans: &[crate::clean::RuleScan],
+    home: &Path,
+    snapshot_requested: bool,
+) -> Result<()> {
+    let output = clean::dry_run_output(scans);
+    print!("{}", output.details);
+
+    match write_dry_run_report(home, &output.details) {
+        Ok(path) => println!("Dry-run report saved to {}", path.display()),
+        Err(err) => eprintln!("Failed to write dry-run report: {err}"),
+    }
+
+    let report = output.report;
+    println!(
+        "Dry-run listed {} files and {} directories",
+        report.files_listed, report.dirs_listed
+    );
+    println!("Would free {}", format_size(report.bytes_listed, BINARY));
+    if snapshot_requested {
+        println!("Snapshot skipped in dry-run.");
+    }
+    if report.errors > 0 {
+        println!("Errors encountered: {}", report.errors);
+    }
+    Ok(())
+}
+
+fn write_dry_run_report(home: &Path, details: &str) -> Result<PathBuf> {
+    let mut path = home.to_path_buf();
+    path.push("vole-dry-run.txt");
+    std::fs::write(&path, details)
+        .with_context(|| format!("could not write {}", path.display()))?;
+    Ok(path)
+}
+
 fn confirm(requires_sudo: bool) -> Result<bool> {
     if requires_sudo {
         print!("Sudo mode: type DELETE to confirm: ");
@@ -224,7 +256,7 @@ fn confirm(requires_sudo: bool) -> Result<bool> {
     Ok(input == "y" || input == "yes")
 }
 
-fn handle_tui(exit: tui::TuiExit) -> Result<()> {
+fn handle_tui(exit: tui::TuiExit, home: &Path) -> Result<()> {
     match exit {
         tui::TuiExit::Quit => Ok(()),
         tui::TuiExit::ReexecSudo { args } => reexec_with_sudo(&args),
@@ -235,15 +267,7 @@ fn handle_tui(exit: tui::TuiExit) -> Result<()> {
         } => {
             let scans = rules.iter().map(clean::scan_rule).collect::<Vec<_>>();
             if dry_run {
-                let report = clean::dry_run(&scans);
-                println!(
-                    "Dry-run listed {} files and {} directories",
-                    report.files_listed, report.dirs_listed
-                );
-                println!("Would free {}", format_size(report.bytes_listed, BINARY));
-                if report.errors > 0 {
-                    println!("Errors encountered: {}", report.errors);
-                }
+                emit_dry_run(&scans, home, false)?;
                 return Ok(());
             }
 

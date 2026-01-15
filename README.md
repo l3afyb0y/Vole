@@ -8,7 +8,7 @@ Vole focuses on safe cleanup first: default rules are conservative, browser cach
 
 - TUI + CLI parity: run `vole` for the interface or use `vole clean` flags.
 - Safe defaults: user-only cleanup by default, with optional sudo mode.
-- Dry-run toggle: preview without deleting via `--dry-run` or the TUI (lists files and dirs).
+- Dry-run toggle: preview without deleting via `--dry-run` or the TUI (lists files/dirs and saves `~/vole-dry-run.txt`).
 - Distro-aware rules: Arch first-class, then Fedora, then Ubuntu/Debian.
 - Snapshot gating: snapshot option only appears if a supported provider is detected.
 
@@ -58,7 +58,8 @@ vole clean --rule user-trash --rule thumbnails
 vole clean --list-rules
 ```
 
-Use `--dry-run` to preview. By default, `clean` applies deletions after confirmation.
+Use `--dry-run` to preview. Dry-run writes a detailed report to `~/vole-dry-run.txt`.
+By default, `clean` applies deletions after confirmation.
 When running with `--sudo`, Vole requires typing `DELETE` to confirm.
 
 ## Configuration

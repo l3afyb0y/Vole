@@ -26,7 +26,7 @@ pub struct CleanArgs {
     #[arg(long)]
     pub tui: bool,
 
-    /// Preview cleanup without deleting (default is apply with confirmation).
+    /// Preview cleanup without deleting (writes ~/vole-dry-run.txt).
     #[arg(long)]
     pub dry_run: bool,
 

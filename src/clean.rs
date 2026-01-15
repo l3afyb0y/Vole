@@ -1,3 +1,4 @@
+use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -31,6 +32,12 @@ pub struct DryRunReport {
     pub dirs_listed: usize,
     pub bytes_listed: u64,
     pub errors: usize,
+}
+
+#[derive(Debug)]
+pub struct DryRunOutput {
+    pub report: DryRunReport,
+    pub details: String,
 }
 
 pub fn scan_rules(rules: &[Rule]) -> Vec<RuleScan> {
@@ -79,21 +86,25 @@ pub fn apply(scans: &[RuleScan]) -> CleanReport {
     report
 }
 
-pub fn dry_run(scans: &[RuleScan]) -> DryRunReport {
+pub fn dry_run_output(scans: &[RuleScan]) -> DryRunOutput {
     let mut report = DryRunReport::default();
+    let mut details = String::new();
 
-    println!("Dry-run details (no files will be deleted):");
-    println!("Note: directories are only removed if empty after file removal.");
+    let _ = writeln!(details, "Dry-run details (no files will be deleted):");
+    let _ = writeln!(
+        details,
+        "Note: directories are only removed if empty after file removal."
+    );
     for scan in scans {
-        println!("Rule: {} ({})", scan.rule.label, scan.rule.id);
+        let _ = writeln!(details, "Rule: {} ({})", scan.rule.label, scan.rule.id);
         if scan.files.is_empty() && scan.dirs.is_empty() {
-            println!("  (no entries)");
+            let _ = writeln!(details, "  (no entries)");
         } else {
             for path in &scan.files {
-                println!("  file: {}", path.display());
+                let _ = writeln!(details, "  file: {}", path.display());
             }
             for path in &scan.dirs {
-                println!("  dir: {}", path.display());
+                let _ = writeln!(details, "  dir: {}", path.display());
             }
         }
         report.files_listed += scan.files.len();
@@ -102,7 +113,7 @@ pub fn dry_run(scans: &[RuleScan]) -> DryRunReport {
         report.errors += scan.errors;
     }
 
-    report
+    DryRunOutput { report, details }
 }
 
 pub fn scan_rule(rule: &Rule) -> RuleScan {
