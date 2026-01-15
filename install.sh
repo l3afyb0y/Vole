@@ -25,12 +25,20 @@ EOF
 default_bin_dir() {
   local home_bin="$HOME/bin"
   local local_bin="$HOME/.local/bin"
+  local in_path_dir=""
 
-  if [[ ":$PATH:" == *":$home_bin:"* ]]; then
+  if [[ -d "$home_bin" ]]; then
+    home_bin="$(cd "$home_bin" && pwd)"
+  fi
+  if [[ -d "$local_bin" ]]; then
+    local_bin="$(cd "$local_bin" && pwd)"
+  fi
+
+  if [[ -n "$home_bin" && ":$PATH:" == *":$home_bin:"* ]]; then
     echo "$home_bin"
     return
   fi
-  if [[ ":$PATH:" == *":$local_bin:"* ]]; then
+  if [[ -n "$local_bin" && ":$PATH:" == *":$local_bin:"* ]]; then
     echo "$local_bin"
     return
   fi
@@ -38,7 +46,24 @@ default_bin_dir() {
     echo "$home_bin"
     return
   fi
-  echo "$local_bin"
+  if [[ -d "$local_bin" ]]; then
+    echo "$local_bin"
+    return
+  fi
+
+  IFS=':' read -r -a path_entries <<< "$PATH"
+  for dir in "${path_entries[@]}"; do
+    if [[ -n "$dir" && -d "$dir" && -w "$dir" ]]; then
+      in_path_dir="$dir"
+      break
+    fi
+  done
+  if [[ -n "$in_path_dir" ]]; then
+    echo "$in_path_dir"
+    return
+  fi
+
+  echo "$HOME/.local/bin"
 }
 
 while [[ $# -gt 0 ]]; do
@@ -154,6 +179,15 @@ if [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
   export PATH="$BIN_DIR:$PATH"
 fi
 
+if [[ -f "$HOME/.profile" ]]; then
+  source "$HOME/.profile" || true
+fi
+
 if [[ ":$ORIGINAL_PATH:" != *":$BIN_DIR:"* ]]; then
-  echo "Open a new terminal or run: source \"$HOME/.profile\" to use 'vole' immediately."
+  if [[ -t 0 && -t 1 ]]; then
+    echo "Starting a new login shell to load PATH..."
+    exec "${SHELL:-/bin/bash}" -l
+  else
+    echo "Open a new terminal or run: source \"$HOME/.profile\" to use 'vole' immediately."
+  fi
 fi
