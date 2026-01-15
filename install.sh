@@ -89,7 +89,7 @@ ensure_path_bashlike() {
   if [[ ! -f "$rc" ]]; then
     touch "$rc"
   fi
-if ! grep -Fq "$MARKER" "$rc"; then
+  if ! grep -Fq "$MARKER" "$rc"; then
     cat >> "$rc" <<EOF
 $MARKER
 if [[ ":\$PATH:" != *":$BIN_DIR:"* ]]; then
@@ -133,9 +133,12 @@ if [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
   case "$shell_name" in
     bash)
       ensure_path_bashlike "$HOME/.bashrc"
+      ensure_path_bashlike "$HOME/.bash_profile"
+      ensure_path_bashlike "$HOME/.profile"
       ;;
     zsh)
       ensure_path_bashlike "$HOME/.zshrc"
+      ensure_path_bashlike "$HOME/.zprofile"
       ;;
     fish)
       ensure_path_fish "$HOME/.config/fish/config.fish"
