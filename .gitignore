@@ -1,5 +1,11 @@
 Docs/
 target/
+**/*.rs.bk
 .idea/
 .vscode/
+.env
+.env.*
+*.swp
+*.swo
+*.tmp
 .DS_Store

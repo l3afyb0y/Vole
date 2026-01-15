@@ -21,6 +21,7 @@ Vole focuses on safe cleanup first: default rules are conservative, browser cach
 ```
 
 This builds a release binary and installs it to a user bin directory (prefers `~/bin` if it is on `PATH`, otherwise `~/.local/bin`).
+If Rust is missing, the installer will attempt to install it using your distro package manager (pacman, dnf, apt, zypper, apk, xbps) or rustup.
 The install script will attempt to update your shell config automatically (bash, zsh, fish, or `~/.profile`).
 If the install directory is not already on `PATH`, the installer will start a new login shell so you can run `vole` immediately.
 
@@ -45,9 +46,9 @@ Keys:
 - `d`: toggle dry-run
 - `s`: sudo mode (will prompt via sudo)
 - `p`: snapshot (only shown when supported)
-- `a`: apply
+- `a` or `enter`: apply/confirm
 - `q`: quit
-- Mouse: click to toggle, scroll to move, use action buttons
+- Mouse: click to toggle, scroll to move, click/drag in output to jump
 
 ### CLI
 
@@ -58,7 +59,7 @@ vole clean --rule user-trash --rule thumbnails
 vole clean --list-rules
 ```
 
-Use `--dry-run` to preview. Dry-run writes a detailed report to `~/vole-dry-run.txt` and shows output in the TUI panel.
+Use `--dry-run` to preview. Dry-run writes a detailed report to `~/vole-dry-run.txt` and shows output in the TUI panel (scrollable).
 By default, `clean` applies deletions after confirmation.
 When running with `--sudo`, Vole requires typing `DELETE` to confirm.
 
