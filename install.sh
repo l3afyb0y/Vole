@@ -7,6 +7,7 @@ PREFIX="${PREFIX:-}"
 BIN_DIR="${BIN_DIR:-}"
 CARGO="${CARGO:-cargo}"
 MARKER="# Added by Vole installer"
+ORIGINAL_PATH="${PATH}"
 
 usage() {
   cat <<'EOF'
@@ -128,24 +129,31 @@ install -m 0755 "target/release/$BIN_NAME" "$BIN_DIR/$BIN_NAME"
 
 echo "Installed $BIN_NAME to $BIN_DIR/$BIN_NAME"
 
+shell_name="$(basename "${SHELL:-}")"
+case "$shell_name" in
+  bash)
+    ensure_path_bashlike "$HOME/.bashrc"
+    ensure_path_bashlike "$HOME/.bash_profile"
+    ensure_path_bashlike "$HOME/.profile"
+    ;;
+  zsh)
+    ensure_path_bashlike "$HOME/.zshrc"
+    ensure_path_bashlike "$HOME/.zprofile"
+    ensure_path_bashlike "$HOME/.profile"
+    ;;
+  fish)
+    ensure_path_fish "$HOME/.config/fish/config.fish"
+    ensure_path_bashlike "$HOME/.profile"
+    ;;
+  *)
+    ensure_path_bashlike "$HOME/.profile"
+    ;;
+esac
+
 if [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
-  shell_name="$(basename "${SHELL:-}")"
-  case "$shell_name" in
-    bash)
-      ensure_path_bashlike "$HOME/.bashrc"
-      ensure_path_bashlike "$HOME/.bash_profile"
-      ensure_path_bashlike "$HOME/.profile"
-      ;;
-    zsh)
-      ensure_path_bashlike "$HOME/.zshrc"
-      ensure_path_bashlike "$HOME/.zprofile"
-      ;;
-    fish)
-      ensure_path_fish "$HOME/.config/fish/config.fish"
-      ;;
-    *)
-      ensure_path_bashlike "$HOME/.profile"
-      ;;
-  esac
   export PATH="$BIN_DIR:$PATH"
+fi
+
+if [[ ":$ORIGINAL_PATH:" != *":$BIN_DIR:"* ]]; then
+  echo "Open a new terminal or run: source \"$HOME/.profile\" to use 'vole' immediately."
 fi
