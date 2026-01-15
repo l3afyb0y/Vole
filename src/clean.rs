@@ -2,7 +2,7 @@ use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use walkdir::{DirEntry, WalkDir};
 
@@ -114,6 +114,14 @@ pub fn dry_run_output(scans: &[RuleScan]) -> DryRunOutput {
     }
 
     DryRunOutput { report, details }
+}
+
+pub fn write_dry_run_report(home: &Path, details: &str) -> Result<PathBuf> {
+    let mut path = home.to_path_buf();
+    path.push("vole-dry-run.txt");
+    std::fs::write(&path, details)
+        .with_context(|| format!("could not write {}", path.display()))?;
+    Ok(path)
 }
 
 pub fn scan_rule(rule: &Rule) -> RuleScan {

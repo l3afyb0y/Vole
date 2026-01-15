@@ -44,35 +44,31 @@ fn main() -> Result<()> {
             if args.tui {
                 let sudo_reexec = build_tui_sudo_reexec(&cli, &home)?;
                 let tui_state = load_tui_state(args.tui_state.as_deref())?;
-                return handle_tui(
-                    tui::run(
-                        config.available_rules(&distro),
-                        snapshot_support,
-                        is_root,
-                        args.sudo,
-                        args.dry_run,
-                        sudo_reexec,
-                        tui_state,
-                    )?,
-                    &home,
-                );
+                return handle_tui(tui::run(
+                    config.available_rules(&distro),
+                    snapshot_support,
+                    is_root,
+                    args.sudo,
+                    args.dry_run,
+                    sudo_reexec,
+                    tui_state,
+                    home.clone(),
+                )?);
             }
             run_clean_cli(&config, &distro, args, snapshot_support, is_root, &home)
         }
         None => {
             let sudo_reexec = build_tui_sudo_reexec(&cli, &home)?;
-            handle_tui(
-                tui::run(
-                    config.available_rules(&distro),
-                    snapshot_support,
-                    is_root,
-                    false,
-                    false,
-                    sudo_reexec,
-                    None,
-                )?,
-                &home,
-            )
+            handle_tui(tui::run(
+                config.available_rules(&distro),
+                snapshot_support,
+                is_root,
+                false,
+                false,
+                sudo_reexec,
+                None,
+                home.clone(),
+            )?)
         }
     }
 }
@@ -210,7 +206,7 @@ fn emit_dry_run(
     let output = clean::dry_run_output(scans);
     print!("{}", output.details);
 
-    match write_dry_run_report(home, &output.details) {
+    match clean::write_dry_run_report(home, &output.details) {
         Ok(path) => println!("Dry-run report saved to {}", path.display()),
         Err(err) => eprintln!("Failed to write dry-run report: {err}"),
     }
@@ -228,14 +224,6 @@ fn emit_dry_run(
         println!("Errors encountered: {}", report.errors);
     }
     Ok(())
-}
-
-fn write_dry_run_report(home: &Path, details: &str) -> Result<PathBuf> {
-    let mut path = home.to_path_buf();
-    path.push("vole-dry-run.txt");
-    std::fs::write(&path, details)
-        .with_context(|| format!("could not write {}", path.display()))?;
-    Ok(path)
 }
 
 fn confirm(requires_sudo: bool) -> Result<bool> {
@@ -256,21 +244,12 @@ fn confirm(requires_sudo: bool) -> Result<bool> {
     Ok(input == "y" || input == "yes")
 }
 
-fn handle_tui(exit: tui::TuiExit, home: &Path) -> Result<()> {
+fn handle_tui(exit: tui::TuiExit) -> Result<()> {
     match exit {
         tui::TuiExit::Quit => Ok(()),
         tui::TuiExit::ReexecSudo { args } => reexec_with_sudo(&args),
-        tui::TuiExit::Apply {
-            rules,
-            snapshot,
-            dry_run,
-        } => {
+        tui::TuiExit::Apply { rules, snapshot } => {
             let scans = rules.iter().map(clean::scan_rule).collect::<Vec<_>>();
-            if dry_run {
-                emit_dry_run(&scans, home, false)?;
-                return Ok(());
-            }
-
             if let Some(support) = snapshot {
                 let outcome = snapshot::create_snapshot(&support)?;
                 println!("{}", outcome.display());

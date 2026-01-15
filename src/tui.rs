@@ -21,9 +21,11 @@ use ratatui::Terminal;
 use serde::{Deserialize, Serialize};
 use serde_json;
 
-use crate::clean::scan_rule;
+use crate::clean::{dry_run_output, scan_rule, write_dry_run_report};
 use crate::config::Rule;
 use crate::snapshot::SnapshotSupport;
+
+const OUTPUT_MAX_LINES: usize = 200;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PersistedState {
@@ -42,6 +44,7 @@ pub fn run(
     start_with_dry_run: bool,
     sudo_reexec: Option<Vec<String>>,
     initial_state: Option<PersistedState>,
+    home: PathBuf,
 ) -> Result<TuiExit> {
     let mut terminal = setup_terminal()?;
     let mut app = AppState::new(
@@ -51,6 +54,7 @@ pub fn run(
         start_with_sudo,
         start_with_dry_run,
         sudo_reexec,
+        home,
     );
     if let Some(state) = initial_state {
         app.apply_state(&state);
@@ -70,7 +74,6 @@ pub enum TuiExit {
     Apply {
         rules: Vec<Rule>,
         snapshot: Option<SnapshotSupport>,
-        dry_run: bool,
     },
     ReexecSudo {
         args: Vec<String>,
@@ -111,6 +114,9 @@ struct AppState {
     message: Option<String>,
     sudo_reexec_args: Option<Vec<String>>,
     layout: UiLayout,
+    home: PathBuf,
+    output_lines: Vec<String>,
+    output_truncated: bool,
 }
 
 impl AppState {
@@ -121,6 +127,7 @@ impl AppState {
         start_with_sudo: bool,
         start_with_dry_run: bool,
         sudo_reexec_args: Option<Vec<String>>,
+        home: PathBuf,
     ) -> Self {
         let mut list_state = ListState::default();
         if !rules.is_empty() {
@@ -156,6 +163,9 @@ impl AppState {
             message: None,
             sudo_reexec_args,
             layout: UiLayout::default(),
+            home,
+            output_lines: Vec::new(),
+            output_truncated: false,
         }
     }
 
@@ -369,6 +379,55 @@ impl AppState {
             self.list_state.select(Some(0));
         }
     }
+
+    fn selected_scans(&self) -> Vec<crate::clean::RuleScan> {
+        self.rules
+            .iter()
+            .filter(|rule| rule.enabled)
+            .filter_map(|rule| rule.scan.clone())
+            .collect()
+    }
+
+    fn set_output_lines(&mut self, lines: Vec<String>) {
+        if lines.len() > OUTPUT_MAX_LINES {
+            self.output_truncated = true;
+            self.output_lines = lines[lines.len() - OUTPUT_MAX_LINES..].to_vec();
+        } else {
+            self.output_truncated = false;
+            self.output_lines = lines;
+        }
+    }
+
+    fn run_dry_run(&mut self) {
+        let scans = self.selected_scans();
+        let output = dry_run_output(&scans);
+        let mut lines = output
+            .details
+            .lines()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>();
+
+        match write_dry_run_report(&self.home, &output.details) {
+            Ok(path) => lines.push(format!("Dry-run report saved to {}", path.display())),
+            Err(err) => lines.push(format!("Failed to write dry-run report: {err}")),
+        }
+
+        let report = output.report;
+        lines.push(format!(
+            "Dry-run listed {} files and {} directories",
+            report.files_listed, report.dirs_listed
+        ));
+        lines.push(format!(
+            "Would free {}",
+            format_size(report.bytes_listed, BINARY)
+        ));
+        if report.errors > 0 {
+            lines.push(format!("Errors encountered: {}", report.errors));
+        }
+
+        self.set_output_lines(lines);
+        self.message = Some("Dry-run complete (see Output panel)".to_string());
+    }
 }
 
 fn run_app(
@@ -413,11 +472,7 @@ fn handle_key(app: &mut AppState, key: KeyEvent) -> Result<Option<TuiExit>> {
                         } else {
                             None
                         };
-                        return Ok(Some(TuiExit::Apply {
-                            rules,
-                            snapshot,
-                            dry_run: app.dry_run,
-                        }));
+                        return Ok(Some(TuiExit::Apply { rules, snapshot }));
                     }
                     app.message = Some("Type DELETE to confirm".to_string());
                     app.confirm_buffer.clear();
@@ -435,17 +490,20 @@ fn handle_key(app: &mut AppState, key: KeyEvent) -> Result<Option<TuiExit>> {
         } else {
             match key.code {
                 KeyCode::Char('y') | KeyCode::Char('Y') => {
+                    if app.dry_run {
+                        app.run_dry_run();
+                        app.confirm_apply = false;
+                        app.confirm_requires_delete = false;
+                        app.confirm_buffer.clear();
+                        return Ok(None);
+                    }
                     let rules = app.selected_rules();
                     let snapshot = if app.snapshot_enabled {
                         app.snapshot_support.clone()
                     } else {
                         None
                     };
-                    return Ok(Some(TuiExit::Apply {
-                        rules,
-                        snapshot,
-                        dry_run: app.dry_run,
-                    }));
+                    return Ok(Some(TuiExit::Apply { rules, snapshot }));
                 }
                 KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
                     app.confirm_apply = false;
@@ -730,6 +788,7 @@ fn draw_ui(frame: &mut ratatui::Frame<'_>, app: &mut AppState) {
         .constraints([
             Constraint::Min(5),
             Constraint::Length(6),
+            Constraint::Min(5),
             Constraint::Length(3),
         ])
         .split(frame.size());
@@ -823,6 +882,29 @@ fn draw_ui(frame: &mut ratatui::Frame<'_>, app: &mut AppState) {
     .block(status_block);
     frame.render_widget(summary_block, chunks[1]);
 
+    let output_title = if app.output_truncated {
+        format!("Output (last {} lines)", OUTPUT_MAX_LINES)
+    } else {
+        "Output".to_string()
+    };
+    let output_block = Block::default().borders(Borders::ALL).title(output_title);
+    let output_inner = output_block.inner(chunks[2]);
+    let height = output_inner.height as usize;
+    let mut output_lines = if app.output_lines.is_empty() {
+        vec![Line::from("No output yet.")]
+    } else {
+        app.output_lines
+            .iter()
+            .map(|line| Line::from(line.as_str()))
+            .collect::<Vec<_>>()
+    };
+    if height > 0 && output_lines.len() > height {
+        let start = output_lines.len().saturating_sub(height);
+        output_lines = output_lines.into_iter().skip(start).collect();
+    }
+    let output_widget = Paragraph::new(output_lines).block(output_block);
+    frame.render_widget(output_widget, chunks[2]);
+
     let message = if app.confirm_apply && app.confirm_requires_delete {
         if app.confirm_buffer.is_empty() {
             "Sudo mode: type DELETE to confirm".to_string()
@@ -840,7 +922,7 @@ fn draw_ui(frame: &mut ratatui::Frame<'_>, app: &mut AppState) {
     };
     let message_block =
         Paragraph::new(message).block(Block::default().borders(Borders::ALL).title("Message"));
-    frame.render_widget(message_block, chunks[2]);
+    frame.render_widget(message_block, chunks[3]);
 }
 
 fn on_off(value: bool) -> &'static str {
