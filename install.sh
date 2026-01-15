@@ -146,4 +146,3 @@ if [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
   esac
   export PATH="$BIN_DIR:$PATH"
 fi
-fi
