@@ -16,7 +16,10 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
+use ratatui::widgets::{
+    Block, Borders, List, ListItem, ListState, Paragraph, Scrollbar, ScrollbarOrientation,
+    ScrollbarState,
+};
 use ratatui::Terminal;
 use serde::{Deserialize, Serialize};
 use serde_json;
@@ -1002,19 +1005,46 @@ fn draw_ui(frame: &mut ratatui::Frame<'_>, app: &mut AppState) {
     app.layout.output_area = Some(output_inner);
     let height = output_inner.height as usize;
     app.clamp_output_scroll();
-    let output_widget = if app.output_lines.is_empty() {
-        Paragraph::new(vec![Line::from("No output yet.")]).block(output_block)
+
+    let show_scrollbar = height > 0 && output_inner.width > 1 && app.output_lines.len() > height;
+    let mut output_text_area = output_inner;
+    let scrollbar_area = if show_scrollbar {
+        output_text_area.width = output_text_area.width.saturating_sub(1);
+        Some(Rect {
+            x: output_inner.x + output_inner.width - 1,
+            y: output_inner.y,
+            width: 1,
+            height: output_inner.height,
+        })
+    } else {
+        None
+    };
+
+    frame.render_widget(output_block, chunks[2]);
+    let lines = if app.output_lines.is_empty() {
+        vec![Line::from("No output yet.")]
     } else {
         let max_offset = app.output_lines.len().saturating_sub(height);
         let offset = app.output_scroll.min(max_offset);
         let end = (offset + height).min(app.output_lines.len());
-        let lines = app.output_lines[offset..end]
+        app.output_lines[offset..end]
             .iter()
             .map(|line| Line::from(line.as_str()))
-            .collect::<Vec<_>>();
-        Paragraph::new(lines).block(output_block)
+            .collect::<Vec<_>>()
     };
-    frame.render_widget(output_widget, chunks[2]);
+    let output_widget = Paragraph::new(lines);
+    frame.render_widget(output_widget, output_text_area);
+
+    if let Some(area) = scrollbar_area {
+        let mut state = ScrollbarState::new(app.output_lines.len())
+            .position(app.output_scroll)
+            .viewport_content_length(height);
+        let scrollbar = Scrollbar::default()
+            .orientation(ScrollbarOrientation::VerticalRight)
+            .begin_symbol(Some("↑"))
+            .end_symbol(Some("↓"));
+        frame.render_stateful_widget(scrollbar, area, &mut state);
+    }
 
     let message = if app.confirm_apply && app.confirm_requires_delete {
         if app.confirm_buffer.is_empty() {
