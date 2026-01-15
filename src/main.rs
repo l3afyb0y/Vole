@@ -6,7 +6,7 @@ mod snapshot;
 mod tui;
 
 use std::io::{self, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use clap::Parser;
@@ -34,15 +34,16 @@ fn main() -> Result<()> {
             }
             if args.tui {
                 let sudo_reexec = build_tui_sudo_reexec(&cli)?;
-                return handle_tui(
-                    tui::run(
-                        config.available_rules(&distro),
-                        snapshot_support,
-                        is_root,
-                        args.sudo,
-                        sudo_reexec,
-                    )?,
-                );
+                let tui_state = load_tui_state(args.tui_state.as_deref())?;
+                return handle_tui(tui::run(
+                    config.available_rules(&distro),
+                    snapshot_support,
+                    is_root,
+                    args.sudo,
+                    args.dry_run,
+                    sudo_reexec,
+                    tui_state,
+                )?);
             }
             run_clean_cli(&config, &distro, args, snapshot_support, is_root)
         }
@@ -53,7 +54,9 @@ fn main() -> Result<()> {
                 snapshot_support,
                 is_root,
                 false,
+                false,
                 sudo_reexec,
+                None,
             )?)
         }
     }
@@ -119,7 +122,7 @@ fn run_clean_cli(
         println!("{}", outcome.display());
     }
 
-    if !args.yes && !confirm()? {
+    if !args.yes && !confirm(args.sudo)? {
         println!("Canceled.");
         return Ok(());
     }
@@ -167,7 +170,16 @@ fn print_plan(scans: &[crate::clean::RuleScan]) {
     );
 }
 
-fn confirm() -> Result<bool> {
+fn confirm(requires_sudo: bool) -> Result<bool> {
+    if requires_sudo {
+        print!("Sudo mode: type DELETE to confirm: ");
+        io::stdout().flush().ok();
+        let mut input = String::new();
+        io::stdin().read_line(&mut input)?;
+        let input = input.trim().to_lowercase();
+        return Ok(input == "delete");
+    }
+
     print!("Proceed with deletion? [y/N]: ");
     io::stdout().flush().ok();
     let mut input = String::new();
@@ -254,6 +266,15 @@ fn reexec_with_sudo(args: &[String]) -> Result<()> {
         .status()
         .context("Failed to invoke sudo")?;
     std::process::exit(status.code().unwrap_or(1));
+}
+
+fn load_tui_state(path: Option<&Path>) -> Result<Option<tui::PersistedState>> {
+    let Some(path) = path else {
+        return Ok(None);
+    };
+    let state = tui::load_state(path)?;
+    std::fs::remove_file(path).ok();
+    Ok(Some(state))
 }
 
 fn is_root() -> bool {

@@ -34,6 +34,10 @@ pub struct CleanArgs {
     #[arg(long)]
     pub sudo: bool,
 
+    /// Internal: path to a saved TUI state file.
+    #[arg(long, hide = true)]
+    pub tui_state: Option<PathBuf>,
+
     /// Create a snapshot before cleaning (if supported).
     #[arg(long)]
     pub snapshot: bool,

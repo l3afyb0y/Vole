@@ -1,4 +1,5 @@
 use std::io;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::Result;
@@ -15,21 +16,44 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Line;
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 use ratatui::Terminal;
+use serde::{Deserialize, Serialize};
+use serde_json;
 
 use crate::clean::scan_rule;
 use crate::config::Rule;
 use crate::snapshot::SnapshotSupport;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PersistedState {
+    pub enabled_rules: Vec<String>,
+    pub selected_rule: Option<String>,
+    pub dry_run: bool,
+    pub snapshot_enabled: bool,
+    pub include_sudo: bool,
+}
 
 pub fn run(
     rules: Vec<Rule>,
     snapshot_support: Option<SnapshotSupport>,
     is_root: bool,
     start_with_sudo: bool,
+    start_with_dry_run: bool,
     sudo_reexec: Option<Vec<String>>,
+    initial_state: Option<PersistedState>,
 ) -> Result<TuiExit> {
     let mut terminal = setup_terminal()?;
-    let mut app = AppState::new(rules, snapshot_support, is_root, start_with_sudo, sudo_reexec);
-    app.rescan();
+    let mut app = AppState::new(
+        rules,
+        snapshot_support,
+        is_root,
+        start_with_sudo,
+        start_with_dry_run,
+        sudo_reexec,
+    );
+    if let Some(state) = initial_state {
+        app.apply_state(&state);
+    }
+    app.rescan_with_message(Some("Scan complete".to_string()));
 
     let exit = run_app(&mut terminal, &mut app);
 
@@ -78,6 +102,8 @@ struct AppState {
     snapshot_support: Option<SnapshotSupport>,
     snapshot_enabled: bool,
     confirm_apply: bool,
+    confirm_requires_delete: bool,
+    confirm_buffer: String,
     message: Option<String>,
     sudo_reexec_args: Option<Vec<String>>,
     layout: UiLayout,
@@ -89,6 +115,7 @@ impl AppState {
         snapshot_support: Option<SnapshotSupport>,
         is_root: bool,
         start_with_sudo: bool,
+        start_with_dry_run: bool,
         sudo_reexec_args: Option<Vec<String>>,
     ) -> Self {
         let mut list_state = ListState::default();
@@ -110,19 +137,21 @@ impl AppState {
                 })
                 .collect(),
             list_state,
-            dry_run: false,
+            dry_run: if include_sudo { true } else { start_with_dry_run },
             include_sudo,
             is_root,
             snapshot_support,
             snapshot_enabled: false,
             confirm_apply: false,
+            confirm_requires_delete: false,
+            confirm_buffer: String::new(),
             message: None,
             sudo_reexec_args,
             layout: UiLayout::default(),
         }
     }
 
-    fn rescan(&mut self) {
+    fn rescan_with_message(&mut self, message: Option<String>) {
         for state in &mut self.rules {
             if state.rule.requires_sudo && (!self.include_sudo || !self.is_root) {
                 state.scan = None;
@@ -130,7 +159,7 @@ impl AppState {
             }
             state.scan = Some(scan_rule(&state.rule));
         }
-        self.message = Some("Scan complete".to_string());
+        self.message = message;
     }
 
     fn toggle_selected(&mut self) {
@@ -191,6 +220,7 @@ impl AppState {
     }
 
     fn toggle_sudo(&mut self) {
+        let was_enabled = self.include_sudo;
         self.include_sudo = !self.include_sudo;
         for rule in &mut self.rules {
             if rule.rule.requires_sudo {
@@ -201,7 +231,12 @@ impl AppState {
                 }
             }
         }
-        self.rescan();
+        if self.include_sudo && !was_enabled {
+            self.dry_run = true;
+            self.rescan_with_message(Some("Sudo mode enabled: dry-run forced ON".to_string()));
+        } else {
+            self.rescan_with_message(Some("Scan complete".to_string()));
+        }
     }
 
     fn toggle_snapshot(&mut self) {
@@ -233,6 +268,52 @@ impl AppState {
             .map(|rule| rule.rule.clone())
             .collect()
     }
+
+    fn apply_state(&mut self, state: &PersistedState) {
+        self.include_sudo = self.is_root && state.include_sudo;
+        self.dry_run = if self.include_sudo { true } else { state.dry_run };
+        self.snapshot_enabled = state.snapshot_enabled && self.snapshot_support.is_some();
+        let enabled = state
+            .enabled_rules
+            .iter()
+            .map(|id| id.to_lowercase())
+            .collect::<Vec<_>>();
+        for (index, rule) in self.rules.iter_mut().enumerate() {
+            let should_enable = enabled.iter().any(|id| id == &rule.rule.id.to_lowercase());
+            rule.enabled = if rule.rule.requires_sudo && !self.include_sudo {
+                false
+            } else {
+                should_enable
+            };
+            if let Some(selected_id) = &state.selected_rule {
+                if rule.rule.id.eq_ignore_ascii_case(selected_id) {
+                    self.list_state.select(Some(index));
+                }
+            }
+        }
+        if self.list_state.selected().is_none() && !self.rules.is_empty() {
+            self.list_state.select(Some(0));
+        }
+    }
+
+    fn export_state(&self) -> PersistedState {
+        PersistedState {
+            enabled_rules: self
+                .rules
+                .iter()
+                .filter(|rule| rule.enabled)
+                .map(|rule| rule.rule.id.clone())
+                .collect(),
+            selected_rule: self
+                .list_state
+                .selected()
+                .and_then(|index| self.rules.get(index))
+                .map(|state| state.rule.id.clone()),
+            dry_run: self.dry_run,
+            snapshot_enabled: self.snapshot_enabled,
+            include_sudo: self.include_sudo,
+        }
+    }
 }
 
 fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut AppState) -> Result<TuiExit> {
@@ -259,20 +340,54 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut AppS
 
 fn handle_key(app: &mut AppState, key: KeyEvent) -> Result<Option<TuiExit>> {
     if app.confirm_apply {
-        match key.code {
-            KeyCode::Char('y') | KeyCode::Char('Y') => {
-                let rules = app.selected_rules();
-                let snapshot = if app.snapshot_enabled {
-                    app.snapshot_support.clone()
-                } else {
-                    None
-                };
-                return Ok(Some(TuiExit::Apply { rules, snapshot }));
+        if app.confirm_requires_delete {
+            match key.code {
+                KeyCode::Esc => {
+                    app.confirm_apply = false;
+                    app.confirm_requires_delete = false;
+                    app.confirm_buffer.clear();
+                }
+                KeyCode::Enter => {
+                    if app.confirm_buffer.eq_ignore_ascii_case("delete") {
+                        let rules = app.selected_rules();
+                        let snapshot = if app.snapshot_enabled {
+                            app.snapshot_support.clone()
+                        } else {
+                            None
+                        };
+                        return Ok(Some(TuiExit::Apply { rules, snapshot }));
+                    }
+                    app.message = Some("Type DELETE to confirm".to_string());
+                    app.confirm_buffer.clear();
+                }
+                KeyCode::Backspace => {
+                    app.confirm_buffer.pop();
+                }
+                KeyCode::Char(c) => {
+                    if c.is_ascii_alphabetic() && app.confirm_buffer.len() < 6 {
+                        app.confirm_buffer.push(c.to_ascii_uppercase());
+                    }
+                }
+                _ => {}
             }
-            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
-                app.confirm_apply = false;
+        } else {
+            match key.code {
+                KeyCode::Char('y') | KeyCode::Char('Y') => {
+                    let rules = app.selected_rules();
+                    let snapshot = if app.snapshot_enabled {
+                        app.snapshot_support.clone()
+                    } else {
+                        None
+                    };
+                    return Ok(Some(TuiExit::Apply { rules, snapshot }));
+                }
+                KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                    app.confirm_apply = false;
+                    app.confirm_requires_delete = false;
+                    app.confirm_buffer.clear();
+                }
+                _ => {}
             }
-            _ => {}
         }
         return Ok(None);
     }
@@ -289,14 +404,14 @@ fn handle_key(app: &mut AppState, key: KeyEvent) -> Result<Option<TuiExit>> {
             app.toggle_selected();
         }
         KeyCode::Char('r') => {
-            app.rescan();
+            app.rescan_with_message(Some("Scan complete".to_string()));
         }
         KeyCode::Char('d') => {
             app.dry_run = !app.dry_run;
         }
         KeyCode::Char('s') => {
             if !app.is_root {
-                if let Some(args) = app.sudo_reexec_args.clone() {
+                if let Some(args) = build_sudo_reexec(app)? {
                     return Ok(Some(TuiExit::ReexecSudo { args }));
                 }
                 app.message = Some("Sudo is unavailable in this environment".to_string());
@@ -366,6 +481,8 @@ fn begin_apply(app: &mut AppState) {
         app.message = Some("No rules selected".to_string());
     } else {
         app.confirm_apply = true;
+        app.confirm_requires_delete = app.include_sudo;
+        app.confirm_buffer.clear();
     }
 }
 
@@ -392,6 +509,31 @@ fn handle_action_click(app: &mut AppState, col: u16, row: u16) -> bool {
     false
 }
 
+fn build_sudo_reexec(app: &AppState) -> Result<Option<Vec<String>>> {
+    let Some(mut args) = app.sudo_reexec_args.clone() else {
+        return Ok(None);
+    };
+    let path = save_state_to_temp(app)?;
+    args.push("--tui-state".to_string());
+    args.push(path.to_string_lossy().to_string());
+    Ok(Some(args))
+}
+
+fn save_state_to_temp(app: &AppState) -> Result<PathBuf> {
+    let mut path = std::env::temp_dir();
+    let pid = std::process::id();
+    path.push(format!("vole-tui-state-{}.json", pid));
+    let data = serde_json::to_vec(&app.export_state())?;
+    std::fs::write(&path, data)?;
+    Ok(path)
+}
+
+pub fn load_state(path: &Path) -> Result<PersistedState> {
+    let data = std::fs::read(path)?;
+    let state = serde_json::from_slice(&data)?;
+    Ok(state)
+}
+
 fn in_list_area(app: &AppState, col: u16, row: u16) -> bool {
     app.layout
         .list_area
@@ -411,10 +553,18 @@ fn build_action_line(area: Rect, app: &AppState) -> (String, ActionHitboxes) {
     let mut hitboxes = ActionHitboxes::default();
 
     let mut cursor = line.len() as u16;
-    let apply_label = "[Apply]";
+    let apply_enabled = !app.dry_run && !app.selected_rules().is_empty();
+    let apply_label = if apply_enabled {
+        "[Apply]"
+    } else {
+        "[Apply (disabled)]"
+    };
     let dry_label = if app.dry_run { "[Dry-run: ON]" } else { "[Dry-run: OFF]" };
 
     cursor = push_button(&mut line, inner, cursor, apply_label, &mut hitboxes.apply);
+    if !apply_enabled {
+        hitboxes.apply = None;
+    }
     line.push(' ');
     cursor += 1;
     cursor = push_button(&mut line, inner, cursor, dry_label, &mut hitboxes.dry_run);
@@ -539,10 +689,16 @@ fn draw_ui(frame: &mut ratatui::Frame<'_>, app: &mut AppState) {
     .block(status_block);
     frame.render_widget(summary_block, chunks[1]);
 
-    let message = if app.confirm_apply {
-        "Confirm delete? (y/n)"
+    let message = if app.confirm_apply && app.confirm_requires_delete {
+        if app.confirm_buffer.is_empty() {
+            "Sudo mode: type DELETE to confirm".to_string()
+        } else {
+            format!("Type DELETE to confirm: {}", app.confirm_buffer)
+        }
+    } else if app.confirm_apply {
+        "Confirm delete? (y/n)".to_string()
     } else {
-        app.message.as_deref().unwrap_or("")
+        app.message.clone().unwrap_or_default()
     };
     let message_block = Paragraph::new(message)
         .block(Block::default().borders(Borders::ALL).title("Message"));

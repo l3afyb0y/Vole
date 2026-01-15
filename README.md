@@ -57,6 +57,7 @@ vole clean --list-rules
 ```
 
 Use `--dry-run` to preview. By default, `clean` applies deletions after confirmation.
+When running with `--sudo`, Vole requires typing `DELETE` to confirm.
 
 ## Configuration
 
