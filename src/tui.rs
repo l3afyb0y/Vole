@@ -96,7 +96,6 @@ struct ActionHitboxes {
 
 #[derive(Debug, Clone)]
 struct ActionLine {
-    text: String,
     spans: Vec<Span<'static>>,
 }
 
@@ -838,7 +837,7 @@ fn build_action_line(area: Rect, app: &AppState) -> (ActionLine, ActionHitboxes)
         spans.push(Span::styled(snapshot_label.to_string(), base_style));
     }
 
-    (ActionLine { text: line, spans }, hitboxes)
+    (ActionLine { spans }, hitboxes)
 }
 
 fn sudo_status_spans(sudo_on: bool, base_style: Style, bracketed: bool) -> Vec<Span<'static>> {
