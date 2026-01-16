@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
 
 use anyhow::{Context, Result};
 use globset::{Glob, GlobSet, GlobSetBuilder};
@@ -106,6 +107,31 @@ pub fn dry_run_output(scans: &[RuleScan]) -> DryRunOutput {
         let _ = writeln!(details, "Rule: {} ({})", scan.rule.label, scan.rule.id);
         if scan.files.is_empty() && scan.dirs.is_empty() {
             let _ = writeln!(details, "  (no entries)");
+        } else if scan.rule.kind == RuleKind::Downloads {
+            let summary_dirs = summarize_download_dirs(&scan.dirs);
+            let mut suppressed = 0usize;
+            if summary_dirs.is_empty() {
+                for path in &scan.files {
+                    let _ = writeln!(details, "  file: {}", path.display());
+                }
+                for path in &scan.dirs {
+                    let _ = writeln!(details, "  dir: {}", path.display());
+                }
+            } else {
+                for path in &scan.files {
+                    if path_is_under_any(path, &summary_dirs) {
+                        suppressed += 1;
+                        continue;
+                    }
+                    let _ = writeln!(details, "  file: {}", path.display());
+                }
+                for path in &summary_dirs {
+                    let _ = writeln!(details, "  dir: {}", path.display());
+                }
+                if suppressed > 0 {
+                    let _ = writeln!(details, "  (contents omitted for Downloads folders)");
+                }
+            }
         } else {
             for path in &scan.files {
                 let _ = writeln!(details, "  file: {}", path.display());
@@ -129,19 +155,160 @@ pub fn dry_run_output(scans: &[RuleScan]) -> DryRunOutput {
     DryRunOutput { report, details }
 }
 
-pub fn write_dry_run_report(home: &Path, details: &str) -> Result<PathBuf> {
+pub fn dry_run_report_path(home: &Path) -> PathBuf {
     let mut path = home.to_path_buf();
     path.push("vole-dry-run.txt");
+    path
+}
+
+pub fn write_dry_run_report(home: &Path, details: &str) -> Result<PathBuf> {
+    let path = dry_run_report_path(home);
     std::fs::write(&path, details)
         .with_context(|| format!("could not write {}", path.display()))?;
     Ok(path)
+}
+
+pub fn remove_dry_run_report(home: &Path) {
+    let path = dry_run_report_path(home);
+    let _ = std::fs::remove_file(path);
 }
 
 pub fn scan_rule(rule: &Rule, options: &ScanOptions) -> RuleScan {
     match rule.kind {
         RuleKind::Paths => scan_paths_rule(rule),
         RuleKind::Downloads => scan_downloads_rule(rule, options.downloads_choice),
+        RuleKind::Logs => scan_logs_rule(rule),
     }
+}
+
+fn scan_logs_rule(rule: &Rule) -> RuleScan {
+    let mut scan = RuleScan {
+        rule: rule.clone(),
+        bytes: 0,
+        entries: 0,
+        files: Vec::new(),
+        dirs: Vec::new(),
+        errors: 0,
+        error_messages: Vec::new(),
+    };
+
+    let (exclude_set, exclude_errors) = build_globset(&rule.exclude_globs);
+    for message in exclude_errors {
+        record_error(&mut scan, message);
+    }
+
+    let cutoff = rule.older_than_days.and_then(cutoff_from_days);
+
+    for root in rule.expanded_paths() {
+        if !root.exists() {
+            continue;
+        }
+
+        if root.is_file() || root.is_symlink() {
+            let base = root.parent().unwrap_or(&root);
+            scan_log_path(&root, base, exclude_set.as_ref(), cutoff, &mut scan);
+            continue;
+        }
+
+        let mut iter = WalkDir::new(&root)
+            .follow_links(false)
+            .same_file_system(true)
+            .into_iter();
+
+        while let Some(next) = iter.next() {
+            match next {
+                Ok(entry) => {
+                    if entry.path() == root {
+                        continue;
+                    }
+                    if entry.file_type().is_dir() {
+                        continue;
+                    }
+                    if entry.file_type().is_symlink() {
+                        continue;
+                    }
+                    if is_excluded(entry.path(), &root, exclude_set.as_ref()) {
+                        continue;
+                    }
+                    if !is_log_file_name(entry.path()) {
+                        continue;
+                    }
+                    let meta = match entry.metadata() {
+                        Ok(meta) => meta,
+                        Err(err) => {
+                            record_error(
+                                &mut scan,
+                                format!(
+                                    "Failed to read metadata for {}: {}",
+                                    entry.path().display(),
+                                    err
+                                ),
+                            );
+                            continue;
+                        }
+                    };
+                    if !meta.is_file() {
+                        continue;
+                    }
+                    if !is_older_than(&meta, cutoff, entry.path(), &mut scan) {
+                        continue;
+                    }
+                    scan.bytes += meta.len();
+                    scan.entries += 1;
+                    scan.files.push(entry.path().to_path_buf());
+                }
+                Err(err) => {
+                    if let Some(path) = err.path() {
+                        record_error(
+                            &mut scan,
+                            format!("Failed to read entry {}: {}", path.display(), err),
+                        );
+                    } else {
+                        record_error(
+                            &mut scan,
+                            format!("Failed to read entry under {}: {}", root.display(), err),
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    scan
+}
+
+fn scan_log_path(
+    path: &Path,
+    root: &Path,
+    exclude: Option<&GlobSet>,
+    cutoff: Option<SystemTime>,
+    scan: &mut RuleScan,
+) {
+    if is_excluded(path, root, exclude) {
+        return;
+    }
+    if !is_log_file_name(path) {
+        return;
+    }
+    let meta = match fs::symlink_metadata(path) {
+        Ok(meta) => meta,
+        Err(err) => {
+            record_error(
+                scan,
+                format!("Failed to read metadata for {}: {}", path.display(), err),
+            );
+            return;
+        }
+    };
+    if meta.file_type().is_symlink() || !meta.is_file() {
+        return;
+    }
+    if !is_older_than(&meta, cutoff, path, scan) {
+        return;
+    }
+    scan.bytes += meta.len();
+    scan.entries += 1;
+    scan.files.push(path.to_path_buf());
 }
 
 fn scan_paths_rule(rule: &Rule) -> RuleScan {
@@ -387,6 +554,70 @@ fn is_excluded(path: &Path, root: &Path, exclude: Option<&GlobSet>) -> bool {
     };
     let rel = path.strip_prefix(root).unwrap_or(path);
     exclude.is_match(rel)
+}
+
+fn is_log_file_name(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
+        return false;
+    };
+    let lower = name.to_ascii_lowercase();
+    if lower == "xsession-errors" || lower.starts_with("xsession-errors.") {
+        return true;
+    }
+    if lower.ends_with(".log") || lower.contains(".log.") {
+        return true;
+    }
+    lower.ends_with(".err") || lower.ends_with(".error")
+}
+
+fn cutoff_from_days(days: u64) -> Option<SystemTime> {
+    let secs = days.saturating_mul(24 * 60 * 60);
+    SystemTime::now().checked_sub(Duration::from_secs(secs))
+}
+
+fn is_older_than(
+    meta: &fs::Metadata,
+    cutoff: Option<SystemTime>,
+    path: &Path,
+    scan: &mut RuleScan,
+) -> bool {
+    let Some(cutoff) = cutoff else {
+        return true;
+    };
+    match meta.modified() {
+        Ok(modified) => modified <= cutoff,
+        Err(err) => {
+            record_error(
+                scan,
+                format!(
+                    "Failed to read modified time for {}: {}",
+                    path.display(),
+                    err
+                ),
+            );
+            false
+        }
+    }
+}
+
+fn summarize_download_dirs(dirs: &[PathBuf]) -> Vec<PathBuf> {
+    if dirs.is_empty() {
+        return Vec::new();
+    }
+    let mut sorted = dirs.to_vec();
+    sorted.sort_by_key(|path| path.components().count());
+    let mut top = Vec::new();
+    for dir in sorted {
+        if top.iter().any(|root: &PathBuf| dir.starts_with(root)) {
+            continue;
+        }
+        top.push(dir);
+    }
+    top
+}
+
+fn path_is_under_any(path: &Path, roots: &[PathBuf]) -> bool {
+    roots.iter().any(|root| path.starts_with(root))
 }
 
 fn build_globset(patterns: &[String]) -> (Option<GlobSet>, Vec<String>) {

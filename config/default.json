@@ -75,6 +75,21 @@
       "enabled_by_default": true
     },
     {
+      "id": "user-error-logs",
+      "label": "User Error Logs",
+      "kind": "logs",
+      "description": "Log files in the user home older than 7 days.",
+      "paths": [
+        "~/.cache",
+        "~/.local/state",
+        "~/.var/log",
+        "~/.xsession-errors",
+        "~/.xsession-errors.old"
+      ],
+      "older_than_days": 7,
+      "enabled_by_default": false
+    },
+    {
       "id": "dev-pip-cache",
       "label": "Python Pip Cache",
       "description": "Downloaded wheels and build cache.",

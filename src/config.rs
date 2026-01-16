@@ -34,6 +34,8 @@ pub struct Rule {
     pub distros: Vec<String>,
     #[serde(default)]
     pub exclude_globs: Vec<String>,
+    #[serde(default)]
+    pub older_than_days: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -41,6 +43,7 @@ pub struct Rule {
 pub enum RuleKind {
     Paths,
     Downloads,
+    Logs,
 }
 
 impl Default for RuleKind {

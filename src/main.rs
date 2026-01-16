@@ -46,31 +46,37 @@ fn main() -> Result<()> {
             if args.tui {
                 let sudo_reexec = build_tui_sudo_reexec(&cli, &home)?;
                 let tui_state = load_tui_state(args.tui_state.as_deref())?;
-                return handle_tui(tui::run(
-                    config.available_rules(&distro),
-                    snapshot_support,
-                    is_root,
-                    args.sudo,
-                    args.dry_run,
-                    sudo_reexec,
-                    tui_state,
-                    home.clone(),
-                )?);
+                return handle_tui(
+                    tui::run(
+                        config.available_rules(&distro),
+                        snapshot_support,
+                        is_root,
+                        args.sudo,
+                        args.dry_run,
+                        sudo_reexec,
+                        tui_state,
+                        home.clone(),
+                    )?,
+                    &home,
+                );
             }
             run_clean_cli(&config, &distro, args, snapshot_support, is_root, &home)
         }
         None => {
             let sudo_reexec = build_tui_sudo_reexec(&cli, &home)?;
-            handle_tui(tui::run(
-                config.available_rules(&distro),
-                snapshot_support,
-                is_root,
-                false,
-                false,
-                sudo_reexec,
-                None,
-                home.clone(),
-            )?)
+            handle_tui(
+                tui::run(
+                    config.available_rules(&distro),
+                    snapshot_support,
+                    is_root,
+                    false,
+                    false,
+                    sudo_reexec,
+                    None,
+                    home.clone(),
+                )?,
+                &home,
+            )
         }
     }
 }
@@ -161,6 +167,7 @@ fn run_clean_cli(
     if report.errors > 0 {
         println!("Errors encountered: {}", report.errors);
     }
+    clean::remove_dry_run_report(home);
 
     Ok(())
 }
@@ -281,7 +288,7 @@ fn prompt_downloads_choice() -> Result<DownloadsChoice> {
     }
 }
 
-fn handle_tui(exit: tui::TuiExit) -> Result<()> {
+fn handle_tui(exit: tui::TuiExit, home: &Path) -> Result<()> {
     match exit {
         tui::TuiExit::Quit => Ok(()),
         tui::TuiExit::ReexecSudo { args } => reexec_with_sudo(&args),
@@ -309,6 +316,7 @@ fn handle_tui(exit: tui::TuiExit) -> Result<()> {
             if report.errors > 0 {
                 println!("Errors encountered: {}", report.errors);
             }
+            clean::remove_dry_run_report(home);
             Ok(())
         }
     }
