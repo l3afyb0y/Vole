@@ -1,3 +1,5 @@
+<img width="1916" height="1080" alt="image" src="https://github.com/user-attachments/assets/0a4cf578-8f45-47a4-9ebf-95a2057f8624" />
+
 # Vole
 
 Safe, Mole-inspired cleanup for Linux with a fast TUI and a full CLI.
