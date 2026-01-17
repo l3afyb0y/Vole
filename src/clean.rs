@@ -210,12 +210,12 @@ fn scan_logs_rule(rule: &Rule) -> RuleScan {
             continue;
         }
 
-        let mut iter = WalkDir::new(&root)
+        let iter = WalkDir::new(&root)
             .follow_links(false)
             .same_file_system(true)
             .into_iter();
 
-        while let Some(next) = iter.next() {
+        for next in iter {
             match next {
                 Ok(entry) => {
                     if entry.path() == root {
@@ -499,13 +499,13 @@ fn scan_root(root: &Path, exclude: Option<&GlobSet>, scan: &mut RuleScan) -> Vec
     }
 
     let mut errors = Vec::new();
-    let mut iter = WalkDir::new(root)
+    let iter = WalkDir::new(root)
         .follow_links(false)
         .same_file_system(true)
         .into_iter()
         .filter_entry(|entry| filter_entry(entry, root, exclude));
 
-    while let Some(next) = iter.next() {
+    for next in iter {
         match next {
             Ok(entry) => {
                 if entry.path() == root {

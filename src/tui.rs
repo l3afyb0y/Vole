@@ -22,7 +22,6 @@ use ratatui::widgets::{
 };
 use ratatui::Terminal;
 use serde::{Deserialize, Serialize};
-use serde_json;
 
 use crate::clean::{dry_run_output, scan_rule, write_dry_run_report};
 use crate::config::{Rule, RuleKind};
@@ -42,16 +41,28 @@ pub struct PersistedState {
     pub downloads_choice: Option<DownloadsChoice>,
 }
 
-pub fn run(
-    rules: Vec<Rule>,
-    snapshot_support: Option<SnapshotSupport>,
-    is_root: bool,
-    start_with_sudo: bool,
-    start_with_dry_run: bool,
-    sudo_reexec: Option<Vec<String>>,
-    initial_state: Option<PersistedState>,
-    home: PathBuf,
-) -> Result<TuiExit> {
+pub struct RunConfig {
+    pub rules: Vec<Rule>,
+    pub snapshot_support: Option<SnapshotSupport>,
+    pub is_root: bool,
+    pub start_with_sudo: bool,
+    pub start_with_dry_run: bool,
+    pub sudo_reexec: Option<Vec<String>>,
+    pub initial_state: Option<PersistedState>,
+    pub home: PathBuf,
+}
+
+pub fn run(config: RunConfig) -> Result<TuiExit> {
+    let RunConfig {
+        rules,
+        snapshot_support,
+        is_root,
+        start_with_sudo,
+        start_with_dry_run,
+        sudo_reexec,
+        initial_state,
+        home,
+    } = config;
     let mut terminal = setup_terminal()?;
     let mut app = AppState::new(
         rules,
@@ -218,14 +229,14 @@ impl AppState {
                 self.message = Some("Requires sudo; restart as root to enable".to_string());
             } else {
                 state.enabled = !state.enabled;
-                if !state.enabled && state.rule.kind == RuleKind::Downloads {
-                    if !self
+                if !state.enabled
+                    && state.rule.kind == RuleKind::Downloads
+                    && !self
                         .rules
                         .iter()
                         .any(|rule| rule.enabled && rule.rule.kind == RuleKind::Downloads)
-                    {
-                        self.downloads_choice = None;
-                    }
+                {
+                    self.downloads_choice = None;
                 }
             }
         }
@@ -466,14 +477,14 @@ impl AppState {
         let mut state = self.export_state();
         state.include_sudo = true;
         for rule in &self.rules {
-            if rule.rule.requires_sudo && rule.rule.enabled_by_default {
-                if !state
+            if rule.rule.requires_sudo
+                && rule.rule.enabled_by_default
+                && !state
                     .enabled_rules
                     .iter()
                     .any(|id| id.eq_ignore_ascii_case(&rule.rule.id))
-                {
-                    state.enabled_rules.push(rule.rule.id.clone());
-                }
+            {
+                state.enabled_rules.push(rule.rule.id.clone());
             }
         }
         state

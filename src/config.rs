@@ -38,18 +38,13 @@ pub struct Rule {
     pub older_than_days: Option<u64>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
 #[serde(rename_all = "kebab-case")]
 pub enum RuleKind {
+    #[default]
     Paths,
     Downloads,
     Logs,
-}
-
-impl Default for RuleKind {
-    fn default() -> Self {
-        RuleKind::Paths
-    }
 }
 
 impl Config {
@@ -83,8 +78,8 @@ impl Config {
         let ids = distro.identifiers();
         self.rules
             .iter()
-            .cloned()
             .filter(|rule| rule.matches_distro(&ids))
+            .cloned()
             .collect()
     }
 

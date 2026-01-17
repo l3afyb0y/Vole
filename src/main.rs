@@ -47,16 +47,16 @@ fn main() -> Result<()> {
                 let sudo_reexec = build_tui_sudo_reexec(&cli, &home)?;
                 let tui_state = load_tui_state(args.tui_state.as_deref())?;
                 return handle_tui(
-                    tui::run(
-                        config.available_rules(&distro),
+                    tui::run(tui::RunConfig {
+                        rules: config.available_rules(&distro),
                         snapshot_support,
                         is_root,
-                        args.sudo,
-                        args.dry_run,
+                        start_with_sudo: args.sudo,
+                        start_with_dry_run: args.dry_run,
                         sudo_reexec,
-                        tui_state,
-                        home.clone(),
-                    )?,
+                        initial_state: tui_state,
+                        home: home.clone(),
+                    })?,
                     &home,
                 );
             }
@@ -65,16 +65,16 @@ fn main() -> Result<()> {
         None => {
             let sudo_reexec = build_tui_sudo_reexec(&cli, &home)?;
             handle_tui(
-                tui::run(
-                    config.available_rules(&distro),
+                tui::run(tui::RunConfig {
+                    rules: config.available_rules(&distro),
                     snapshot_support,
                     is_root,
-                    false,
-                    false,
+                    start_with_sudo: false,
+                    start_with_dry_run: false,
                     sudo_reexec,
-                    None,
-                    home.clone(),
-                )?,
+                    initial_state: None,
+                    home: home.clone(),
+                })?,
                 &home,
             )
         }

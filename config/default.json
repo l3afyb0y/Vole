@@ -99,15 +99,6 @@
       "enabled_by_default": false
     },
     {
-      "id": "dev-npm-cache",
-      "label": "npm Cache",
-      "description": "npm package cache.",
-      "paths": [
-        "~/.npm/_cacache"
-      ],
-      "enabled_by_default": false
-    },
-    {
       "id": "dev-yarn-cache",
       "label": "Yarn Cache",
       "description": "Yarn package cache.",
