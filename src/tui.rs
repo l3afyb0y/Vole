@@ -14,12 +14,53 @@ use crossterm::ExecutableCommand;
 use humansize::{format_size, BINARY};
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{
-    Block, Borders, List, ListItem, ListState, Paragraph, Scrollbar, ScrollbarOrientation,
-    ScrollbarState,
+    block::Title, Block, BorderType, Borders, List, ListItem, ListState, Paragraph, Scrollbar,
+    ScrollbarOrientation, ScrollbarState,
 };
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Color Palette - A cohesive theme for the TUI
+// ═══════════════════════════════════════════════════════════════════════════════
+
+mod theme {
+    use ratatui::style::Color;
+
+    // Primary accent colors
+    pub const ACCENT: Color = Color::Rgb(139, 233, 253); // Cyan accent
+    pub const ACCENT_DIM: Color = Color::Rgb(98, 163, 178); // Dimmed cyan
+    pub const HIGHLIGHT: Color = Color::Rgb(255, 184, 108); // Warm orange for selection
+
+    // Semantic colors
+    pub const SUCCESS: Color = Color::Rgb(80, 250, 123); // Green
+    pub const WARNING: Color = Color::Rgb(255, 184, 108); // Orange
+    pub const DANGER: Color = Color::Rgb(255, 85, 85); // Red
+    pub const INFO: Color = Color::Rgb(189, 147, 249); // Purple
+
+    // Text colors
+    pub const TEXT: Color = Color::Rgb(248, 248, 242); // Primary text
+    pub const TEXT_DIM: Color = Color::Rgb(98, 114, 164); // Dimmed text
+    pub const TEXT_MUTED: Color = Color::Rgb(68, 71, 90); // Very dim
+
+    // Background accents
+    pub const BORDER: Color = Color::Rgb(68, 71, 90); // Border color
+    pub const BORDER_FOCUSED: Color = Color::Rgb(139, 233, 253); // Focused border
+
+    // Status-specific
+    pub const ENABLED: Color = Color::Rgb(80, 250, 123); // Bright green
+    pub const DISABLED: Color = Color::Rgb(98, 114, 164); // Dim gray
+    pub const SUDO_ON: Color = Color::Rgb(255, 85, 85); // Red for sudo active
+    pub const DRY_RUN: Color = Color::Rgb(241, 250, 140); // Yellow for dry-run
+}
+
+// Symbols for visual polish
+mod symbols {
+    pub const CHECK: &str = "✓";
+    pub const BULLET_EMPTY: &str = "○";
+    pub const ARROW_RIGHT: &str = "▸";
+}
 use ratatui::Terminal;
 use serde::{Deserialize, Serialize};
 
@@ -908,56 +949,83 @@ fn build_action_line(area: Rect, app: &AppState) -> (ActionLine, ActionHitboxes)
     let block = Block::default().borders(Borders::ALL).title("Status");
     let inner = block.inner(area);
 
-    let base_style = Style::default().fg(Color::Blue);
-    let mut line = String::from("Actions: ");
-    let mut spans = vec![Span::styled("Actions: ", base_style)];
+    let base_style = Style::default().fg(theme::TEXT_DIM);
+    let mut line = String::from("  Actions: ");
+    let mut spans = vec![Span::styled("  Actions: ", base_style)];
     let mut hitboxes = ActionHitboxes::default();
 
     let mut cursor = line.len() as u16;
     let apply_enabled = !app.selected_rules().is_empty();
-    let apply_label = if !apply_enabled {
-        "[Apply (disabled)]"
+
+    // Styled Apply button
+    let (apply_label, apply_style) = if !apply_enabled {
+        (
+            "▷ Apply (disabled)",
+            Style::default().fg(theme::DISABLED),
+        )
     } else if app.dry_run {
-        "[Apply (dry-run)]"
+        (
+            "▶ Apply (dry-run)",
+            Style::default().fg(theme::DRY_RUN).bold(),
+        )
     } else {
-        "[Apply]"
+        (
+            "▶ Apply",
+            Style::default().fg(theme::DANGER).bold(),
+        )
     };
-    let dry_label = if app.dry_run {
-        "[Dry-run: ON]"
+
+    // Styled Dry-run button
+    let (dry_label, dry_style) = if app.dry_run {
+        (
+            "⚡ Dry-run: ON",
+            Style::default().fg(theme::DRY_RUN).bold(),
+        )
     } else {
-        "[Dry-run: OFF]"
+        (
+            "⚡ Dry-run: OFF",
+            Style::default().fg(theme::TEXT_DIM),
+        )
     };
 
     cursor = push_button(&mut line, inner, cursor, apply_label, &mut hitboxes.apply);
-    spans.push(Span::styled(apply_label.to_string(), base_style));
+    spans.push(Span::styled(apply_label.to_string(), apply_style));
     if !apply_enabled {
         hitboxes.apply = None;
     }
-    line.push(' ');
-    cursor += 1;
-    spans.push(Span::styled(" ", base_style));
-    cursor = push_button(&mut line, inner, cursor, dry_label, &mut hitboxes.dry_run);
-    spans.push(Span::styled(dry_label.to_string(), base_style));
+    line.push_str("  ");
+    cursor += 2;
+    spans.push(Span::styled("  ", base_style));
 
-    line.push(' ');
-    cursor += 1;
-    spans.push(Span::styled(" ", base_style));
+    cursor = push_button(&mut line, inner, cursor, dry_label, &mut hitboxes.dry_run);
+    spans.push(Span::styled(dry_label.to_string(), dry_style));
+
+    line.push_str("  ");
+    cursor += 2;
+    spans.push(Span::styled("  ", base_style));
+
     let sudo_label = if app.include_sudo {
-        "[Sudo: ON]"
+        "🔐 Sudo: ON"
     } else {
-        "[Sudo: OFF]"
+        "🔐 Sudo: OFF"
     };
     cursor = push_button(&mut line, inner, cursor, sudo_label, &mut hitboxes.sudo);
-    spans.extend(sudo_status_spans(app.include_sudo, base_style, true));
+    spans.extend(sudo_status_spans_action(app.include_sudo));
 
     if app.snapshot_support.is_some() {
-        line.push(' ');
-        cursor += 1;
-        spans.push(Span::styled(" ", base_style));
-        let snapshot_label = if app.snapshot_enabled {
-            "[Snapshot: ON]"
+        line.push_str("  ");
+        cursor += 2;
+        spans.push(Span::styled("  ", base_style));
+        let (snapshot_label, snapshot_style) = if app.snapshot_enabled {
+            (
+                "🛡 Snapshot: ON",
+                Style::default().fg(theme::SUCCESS).bold(),
+            )
         } else {
-            "[Snapshot: OFF]"
+            (
+                "🛡 Snapshot: OFF",
+                Style::default().fg(theme::TEXT_DIM),
+            )
         };
         let _ = push_button(
             &mut line,
@@ -966,33 +1034,35 @@ fn build_action_line(area: Rect, app: &AppState) -> (ActionLine, ActionHitboxes)
             snapshot_label,
             &mut hitboxes.snapshot,
         );
-        spans.push(Span::styled(snapshot_label.to_string(), base_style));
+        spans.push(Span::styled(snapshot_label.to_string(), snapshot_style));
     }
 
     (ActionLine { spans }, hitboxes)
 }
 
-fn sudo_status_spans(sudo_on: bool, base_style: Style, bracketed: bool) -> Vec<Span<'static>> {
-    let sudo_style = Style::default().fg(Color::Red);
-    let status_style = if sudo_on {
-        Style::default().fg(Color::Red)
+fn sudo_status_spans_action(sudo_on: bool) -> Vec<Span<'static>> {
+    let style = if sudo_on {
+        Style::default().fg(theme::SUDO_ON).bold()
     } else {
-        Style::default().fg(Color::Green)
+        Style::default().fg(theme::TEXT_DIM)
     };
-    let mut spans = Vec::new();
-    if bracketed {
-        spans.push(Span::styled("[", base_style));
-    }
-    spans.push(Span::styled("Sudo:", sudo_style));
-    spans.push(Span::styled(" ", base_style));
-    spans.push(Span::styled(
-        if sudo_on { "ON" } else { "OFF" },
-        status_style,
-    ));
-    if bracketed {
-        spans.push(Span::styled("]", base_style));
-    }
-    spans
+    vec![Span::styled(
+        if sudo_on { "🔐 Sudo: ON" } else { "🔐 Sudo: OFF" },
+        style,
+    )]
+}
+
+fn sudo_status_spans(sudo_on: bool, _base_style: Style, _bracketed: bool) -> Vec<Span<'static>> {
+    let sudo_label_style = Style::default().fg(theme::TEXT_DIM);
+    let status_style = if sudo_on {
+        Style::default().fg(theme::SUDO_ON).bold()
+    } else {
+        Style::default().fg(theme::SUCCESS)
+    };
+    vec![
+        Span::styled("🔐 Sudo: ", sudo_label_style),
+        Span::styled(if sudo_on { "ON" } else { "OFF" }, status_style),
+    ]
 }
 
 fn push_button(
@@ -1036,121 +1106,253 @@ fn draw_ui(frame: &mut ratatui::Frame<'_>, app: &mut AppState) {
         ])
         .split(frame.size());
 
+    draw_list(frame, app, chunks[0]);
+    draw_status(frame, app, chunks[1]);
+    draw_output(frame, app, chunks[2]);
+    draw_message(frame, app, chunks[3]);
+}
+
+fn draw_list(frame: &mut ratatui::Frame<'_>, app: &mut AppState, area: Rect) {
     let items = app
         .rules
         .iter()
-        .map(|state| {
-            let enabled = if state.enabled { "x" } else { " " };
-            let sudo = if state.rule.requires_sudo {
-                " (sudo)"
+        .enumerate()
+        .map(|(idx, state)| {
+            let is_selected = app.list_state.selected() == Some(idx);
+            let checkbox = if state.enabled {
+                Span::styled(
+                    format!(" {} ", symbols::CHECK),
+                    Style::default().fg(theme::ENABLED).bold(),
+                )
             } else {
-                ""
+                Span::styled(
+                    format!(" {} ", symbols::BULLET_EMPTY),
+                    Style::default().fg(theme::DISABLED),
+                )
             };
+
+            let label_style = if state.enabled {
+                Style::default().fg(theme::TEXT)
+            } else {
+                Style::default().fg(theme::TEXT_DIM)
+            };
+
+            let sudo_span = if state.rule.requires_sudo {
+                Span::styled(" 🔐", Style::default().fg(theme::SUDO_ON))
+            } else {
+                Span::raw("")
+            };
+
             let size = if state.rule.kind == RuleKind::Downloads
                 && state.enabled
                 && app.downloads_choice.is_none()
             {
-                "choose at apply".to_string()
+                Span::styled(
+                    "  ⟨choose at apply⟩",
+                    Style::default().fg(theme::WARNING).italic(),
+                )
             } else {
-                state
+                let size_text = state
                     .scan
                     .as_ref()
-                    .map(|scan| format!("{} / {}", format_size(scan.bytes, BINARY), scan.entries))
-                    .unwrap_or_else(|| "-".to_string())
+                    .map(|scan| {
+                        format!(
+                            "  {} │ {} items",
+                            format_size(scan.bytes, BINARY),
+                            scan.entries
+                        )
+                    })
+                    .unwrap_or_else(|| "  —".to_string());
+                Span::styled(size_text, Style::default().fg(theme::ACCENT_DIM))
             };
-            let content = format!("[{}] {}{}  {}", enabled, state.rule.label, sudo, size);
-            ListItem::new(Line::from(content))
+
+            let arrow = if is_selected {
+                Span::styled(
+                    format!("{} ", symbols::ARROW_RIGHT),
+                    Style::default().fg(theme::HIGHLIGHT).bold(),
+                )
+            } else {
+                Span::raw("  ")
+            };
+
+            ListItem::new(Line::from(vec![
+                arrow,
+                checkbox,
+                Span::styled(state.rule.label.clone(), label_style),
+                sudo_span,
+                size,
+            ]))
         })
         .collect::<Vec<_>>();
 
+    let list_title = Title::from(Line::from(vec![
+        Span::styled(" 🗑 ", Style::default().fg(theme::ACCENT)),
+        Span::styled("Cleanup Rules ", Style::default().fg(theme::ACCENT).bold()),
+    ]));
     let list_block = Block::default()
-        .title("Cleanup Rules")
-        .borders(Borders::ALL);
-    let list_area = list_block.inner(chunks[0]);
-    app.layout.list_area = Some(list_area);
+        .title(list_title)
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(theme::BORDER_FOCUSED));
+    let list_inner = list_block.inner(area);
+    app.layout.list_area = Some(list_inner);
     let list = List::new(items).block(list_block).highlight_style(
         Style::default()
-            .fg(Color::Yellow)
+            .fg(theme::HIGHLIGHT)
             .add_modifier(Modifier::BOLD),
     );
 
-    frame.render_stateful_widget(list, chunks[0], &mut app.list_state);
+    frame.render_stateful_widget(list, area, &mut app.list_state);
+}
 
+fn draw_status(frame: &mut ratatui::Frame<'_>, app: &mut AppState, area: Rect) {
     let (bytes, entries) = app.total_selected();
-    let summary = format!(
-        "Selected: {} rules | {} | {} items",
-        app.selected_rules().len(),
-        format_size(bytes, BINARY),
-        entries
-    );
-    let base_mode = Style::default().fg(Color::LightBlue);
+    let summary_spans = vec![
+        Span::styled("  ✨ Selected: ", Style::default().fg(theme::TEXT_DIM)),
+        Span::styled(
+            format!("{}", app.selected_rules().len()),
+            Style::default().fg(theme::ACCENT).bold(),
+        ),
+        Span::styled(" rules │ ", Style::default().fg(theme::TEXT_DIM)),
+        Span::styled(
+            format_size(bytes, BINARY),
+            Style::default().fg(theme::SUCCESS).bold(),
+        ),
+        Span::styled(" │ ", Style::default().fg(theme::TEXT_DIM)),
+        Span::styled(
+            format!("{}", entries),
+            Style::default().fg(theme::ACCENT).bold(),
+        ),
+        Span::styled(" items", Style::default().fg(theme::TEXT_DIM)),
+    ];
+
     let mut mode_spans = Vec::new();
-    mode_spans.push(Span::styled("Dry-run: ", base_mode));
-    mode_spans.push(Span::styled(on_off(app.dry_run), base_mode));
-    mode_spans.push(Span::styled(" | ", base_mode));
-    mode_spans.extend(sudo_status_spans(app.include_sudo, base_mode, false));
+    mode_spans.push(Span::styled("  ", Style::default()));
+
+    let dry_run_style = if app.dry_run {
+        Style::default().fg(theme::DRY_RUN).bold()
+    } else {
+        Style::default().fg(theme::TEXT_DIM)
+    };
+    mode_spans.push(Span::styled(
+        "⚡ Dry-run: ",
+        Style::default().fg(theme::TEXT_DIM),
+    ));
+    mode_spans.push(Span::styled(
+        if app.dry_run { "ON " } else { "OFF" },
+        dry_run_style,
+    ));
+    mode_spans.push(Span::styled(" │ ", Style::default().fg(theme::TEXT_MUTED)));
+
+    mode_spans.extend(sudo_status_spans(
+        app.include_sudo,
+        Style::default().fg(theme::TEXT_DIM),
+        false,
+    ));
+
     if let Some(support) = &app.snapshot_support {
-        mode_spans.push(Span::styled(" | Snapshot: ", base_mode));
-        mode_spans.push(Span::styled(on_off(app.snapshot_enabled), base_mode));
-        mode_spans.push(Span::styled(" (", base_mode));
-        mode_spans.push(Span::styled(support.label.to_string(), base_mode));
-        mode_spans.push(Span::styled(")", base_mode));
+        mode_spans.push(Span::styled(" │ ", Style::default().fg(theme::TEXT_MUTED)));
+        mode_spans.push(Span::styled(
+            "🛡 Snapshot: ",
+            Style::default().fg(theme::TEXT_DIM),
+        ));
+        let snap_style = if app.snapshot_enabled {
+            Style::default().fg(theme::SUCCESS).bold()
+        } else {
+            Style::default().fg(theme::TEXT_DIM)
+        };
+        mode_spans.push(Span::styled(on_off(app.snapshot_enabled), snap_style));
+        mode_spans.push(Span::styled(
+            format!(" ({})", support.label),
+            Style::default().fg(theme::TEXT_DIM).italic(),
+        ));
     }
+
     if app
         .rules
         .iter()
         .any(|rule| rule.enabled && rule.rule.kind == RuleKind::Downloads)
     {
-        mode_spans.push(Span::styled(" | Downloads: ", base_mode));
+        mode_spans.push(Span::styled(" │ ", Style::default().fg(theme::TEXT_MUTED)));
+        mode_spans.push(Span::styled(
+            "📁 Downloads: ",
+            Style::default().fg(theme::TEXT_DIM),
+        ));
         if let Some(choice) = app.downloads_choice {
-            mode_spans.push(Span::styled(choice.as_str(), base_mode));
+            mode_spans.push(Span::styled(choice.as_str(), Style::default().fg(theme::INFO)));
         } else {
-            mode_spans.push(Span::styled("CHOOSE", Style::default().fg(Color::Yellow)));
+            mode_spans.push(Span::styled(
+                "CHOOSE",
+                Style::default().fg(theme::WARNING).bold(),
+            ));
         }
     }
     let mode_line = Line::from(mode_spans);
 
-    let (action_line, actions) = build_action_line(chunks[1], app);
+    let (action_line, actions) = build_action_line(area, app);
     app.layout.actions = actions;
 
-    let mut help_spans = vec![Span::raw(
-        "Keys: j/k or arrows move | space toggle | r rescan | ",
-    )];
-    help_spans.push(Span::raw("PgUp/PgDn output | "));
-    help_spans.push(Span::styled("d dry-run", Style::default().fg(Color::Green)));
-    help_spans.push(Span::raw(" | "));
-    help_spans.push(Span::styled("s sudo", Style::default().fg(Color::Red)));
+    let mut help_spans = vec![
+        Span::styled("  ", Style::default()),
+        Span::styled("↑↓", Style::default().fg(theme::TEXT_DIM)),
+        Span::styled(" move │ ", Style::default().fg(theme::TEXT_MUTED)),
+        Span::styled("space", Style::default().fg(theme::TEXT_DIM)),
+        Span::styled(" toggle │ ", Style::default().fg(theme::TEXT_MUTED)),
+        Span::styled("r", Style::default().fg(theme::TEXT_DIM)),
+        Span::styled(" rescan │ ", Style::default().fg(theme::TEXT_MUTED)),
+    ];
+    help_spans.push(Span::styled("d", Style::default().fg(theme::DRY_RUN)));
+    help_spans.push(Span::styled(" dry │ ", Style::default().fg(theme::TEXT_MUTED)));
+    help_spans.push(Span::styled("s", Style::default().fg(theme::DANGER)));
+    help_spans.push(Span::styled(" sudo", Style::default().fg(theme::TEXT_MUTED)));
     if app.snapshot_support.is_some() {
-        help_spans.push(Span::raw(" | "));
+        help_spans.push(Span::styled(" │ ", Style::default().fg(theme::TEXT_MUTED)));
+        help_spans.push(Span::styled("p", Style::default().fg(theme::SUCCESS)));
         help_spans.push(Span::styled(
-            "p snapshot",
-            Style::default().fg(Color::Yellow),
+            " snap",
+            Style::default().fg(theme::TEXT_MUTED),
         ));
     }
-    help_spans.push(Span::raw(" | "));
+    help_spans.push(Span::styled(" │ ", Style::default().fg(theme::TEXT_MUTED)));
+    help_spans.push(Span::styled("enter", Style::default().fg(theme::DANGER)));
     help_spans.push(Span::styled(
-        "a/enter apply",
-        Style::default().fg(Color::Red),
+        " apply │ ",
+        Style::default().fg(theme::TEXT_MUTED),
     ));
-    help_spans.push(Span::raw(" | q quit | "));
-    help_spans.push(Span::styled(
-        "mouse: click, scroll list/output",
-        Style::default().fg(Color::LightCyan),
-    ));
-    let status_block = Block::default().borders(Borders::ALL).title("Status");
+    help_spans.push(Span::styled("q", Style::default().fg(theme::TEXT_DIM)));
+    help_spans.push(Span::styled(" quit", Style::default().fg(theme::TEXT_MUTED)));
+
+    let status_title = Title::from(Line::from(vec![
+        Span::styled(" ⚙ ", Style::default().fg(theme::INFO)),
+        Span::styled("Status ", Style::default().fg(theme::INFO).bold()),
+    ]));
+    let status_block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(theme::BORDER))
+        .title(status_title);
     let summary_block = Paragraph::new(vec![
-        Line::styled(summary, Style::default().fg(Color::Cyan)),
+        Line::from(summary_spans),
         mode_line,
         Line::from(action_line.spans),
         Line::from(help_spans),
     ])
     .block(status_block);
-    frame.render_widget(summary_block, chunks[1]);
+    frame.render_widget(summary_block, area);
+}
 
-    let output_title = "Output".to_string();
-    let output_block = Block::default().borders(Borders::ALL).title(output_title);
-    let output_inner = output_block.inner(chunks[2]);
-    app.layout.output_block_area = Some(chunks[2]);
+fn draw_output(frame: &mut ratatui::Frame<'_>, app: &mut AppState, area: Rect) {
+    let output_title = Title::from(Line::from(vec![
+        Span::styled(" 📋 ", Style::default().fg(theme::ACCENT)),
+        Span::styled("Output ", Style::default().fg(theme::ACCENT).bold()),
+    ]));
+    let output_block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(theme::BORDER))
+        .title(output_title);
+    let output_inner = output_block.inner(area);
+    app.layout.output_block_area = Some(area);
     app.layout.output_area = Some(output_inner);
     let height = output_inner.height as usize;
     app.clamp_output_scroll();
@@ -1170,16 +1372,36 @@ fn draw_ui(frame: &mut ratatui::Frame<'_>, app: &mut AppState) {
     };
     app.layout.output_scrollbar_area = scrollbar_area;
 
-    frame.render_widget(output_block, chunks[2]);
+    frame.render_widget(output_block, area);
     let lines = if app.output_lines.is_empty() {
-        vec![Line::from("No output yet.")]
+        vec![Line::styled(
+            "  No output yet. Press 'a' or Enter to run.",
+            Style::default().fg(theme::TEXT_DIM).italic(),
+        )]
     } else {
         let max_offset = app.output_lines.len().saturating_sub(height);
         let offset = app.output_scroll.min(max_offset);
         let end = (offset + height).min(app.output_lines.len());
         app.output_lines[offset..end]
             .iter()
-            .map(|line| Line::from(line.as_str()))
+            .map(|line| {
+                let style = if line.starts_with("Rule:") {
+                    Style::default().fg(theme::ACCENT).bold()
+                } else if line.contains("error") || line.contains("Error") {
+                    Style::default().fg(theme::DANGER)
+                } else if line.starts_with("  file:") {
+                    Style::default().fg(theme::TEXT_DIM)
+                } else if line.starts_with("  dir:") {
+                    Style::default().fg(theme::INFO)
+                } else if line.contains("Would free") || line.contains("Freed") {
+                    Style::default().fg(theme::SUCCESS).bold()
+                } else if line.contains("Dry-run") {
+                    Style::default().fg(theme::DRY_RUN)
+                } else {
+                    Style::default().fg(theme::TEXT)
+                };
+                Line::styled(line.as_str(), style)
+            })
             .collect::<Vec<_>>()
     };
     let output_widget = Paragraph::new(lines);
@@ -1191,31 +1413,69 @@ fn draw_ui(frame: &mut ratatui::Frame<'_>, app: &mut AppState) {
             .viewport_content_length(height);
         let scrollbar = Scrollbar::default()
             .orientation(ScrollbarOrientation::VerticalRight)
-            .begin_symbol(Some("↑"))
-            .end_symbol(Some("↓"));
+            .begin_symbol(Some("▲"))
+            .end_symbol(Some("▼"))
+            .thumb_symbol("█")
+            .track_symbol(Some("│"))
+            .style(Style::default().fg(theme::ACCENT_DIM));
         frame.render_stateful_widget(scrollbar, area, &mut state);
     }
+}
 
-    let message = if app.confirm_downloads_choice {
-        "Downloads cleanup: remove archives or folders? (a/f)".to_string()
+fn draw_message(frame: &mut ratatui::Frame<'_>, app: &mut AppState, area: Rect) {
+    let (message_text, message_style) = if app.confirm_downloads_choice {
+        (
+            "  📁 Downloads cleanup: remove (a)rchives or (f)olders?".to_string(),
+            Style::default().fg(theme::WARNING),
+        )
     } else if app.confirm_apply && app.confirm_requires_delete {
         if app.confirm_buffer.is_empty() {
-            "Sudo mode: type DELETE to confirm".to_string()
+            (
+                "  ⚠️  SUDO MODE: Type DELETE to confirm deletion".to_string(),
+                Style::default().fg(theme::DANGER).bold(),
+            )
         } else {
-            format!("Type DELETE to confirm: {}", app.confirm_buffer)
+            (
+                format!("  ⚠️  Type DELETE to confirm: {}", app.confirm_buffer),
+                Style::default().fg(theme::DANGER).bold(),
+            )
         }
     } else if app.confirm_apply {
         if app.dry_run {
-            "Run dry-run preview? (y/n)".to_string()
+            (
+                "  ⚡ Run dry-run preview? (y/n)".to_string(),
+                Style::default().fg(theme::DRY_RUN),
+            )
         } else {
-            "Confirm delete? (y/n)".to_string()
+            (
+                "  🗑  Confirm deletion? (y/n)".to_string(),
+                Style::default().fg(theme::WARNING),
+            )
         }
     } else {
-        app.message.clone().unwrap_or_default()
+        let msg = app.message.clone().unwrap_or_default();
+        let style = if msg.contains("error") || msg.contains("Error") {
+            Style::default().fg(theme::DANGER)
+        } else if msg.contains("complete") || msg.contains("Complete") {
+            Style::default().fg(theme::SUCCESS)
+        } else {
+            Style::default().fg(theme::TEXT)
+        };
+        (format!("  {}", msg), style)
     };
-    let message_block =
-        Paragraph::new(message).block(Block::default().borders(Borders::ALL).title("Message"));
-    frame.render_widget(message_block, chunks[3]);
+
+    let message_title = Title::from(Line::from(vec![
+        Span::styled(" 💬 ", Style::default().fg(theme::WARNING)),
+        Span::styled("Message ", Style::default().fg(theme::WARNING).bold()),
+    ]));
+    let message_block = Paragraph::new(Line::styled(message_text, message_style)).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(theme::BORDER))
+            .title(message_title),
+    );
+    frame.render_widget(message_block, area);
 }
 
 fn on_off(value: bool) -> &'static str {

@@ -107,12 +107,43 @@ impl Rule {
     pub fn expanded_paths(&self) -> Vec<PathBuf> {
         self.paths
             .iter()
-            .map(|raw| shellexpand::full(raw).unwrap_or_else(|_| raw.into()))
-            .map(|expanded| PathBuf::from(expanded.as_ref()))
+            .map(|raw| {
+                shellexpand::full(raw)
+                    .map(|expanded| PathBuf::from(expanded.as_ref()))
+                    .unwrap_or_else(|_| PathBuf::from(raw))
+            })
             .collect()
     }
 }
 
 pub fn default_config_path() -> Option<PathBuf> {
     ProjectDirs::from("dev", "vole", "vole").map(|dirs| dirs.config_dir().join("config.json"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_rule_matches_distro() {
+        let mut rule = Rule {
+            id: "test".to_string(),
+            label: "Test".to_string(),
+            kind: RuleKind::Paths,
+            description: None,
+            paths: vec![],
+            requires_sudo: false,
+            enabled_by_default: true,
+            distros: vec!["arch".to_string(), "fedora".to_string()],
+            exclude_globs: vec![],
+            older_than_days: None,
+        };
+
+        assert!(rule.matches_distro(&["arch".to_string()]));
+        assert!(rule.matches_distro(&["fedora".to_string()]));
+        assert!(!rule.matches_distro(&["ubuntu".to_string()]));
+
+        rule.distros = vec![];
+        assert!(rule.matches_distro(&["ubuntu".to_string()]));
+    }
 }

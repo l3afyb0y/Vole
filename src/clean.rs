@@ -7,6 +7,7 @@ use std::time::{Duration, SystemTime};
 use anyhow::{Context, Result};
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use walkdir::{DirEntry, WalkDir};
+use rayon::prelude::*;
 
 use crate::config::{Rule, RuleKind};
 use crate::options::{DownloadsChoice, ScanOptions};
@@ -49,49 +50,56 @@ const ARCHIVE_EXTENSIONS: [&str; 7] = [
 ];
 
 pub fn scan_rules(rules: &[Rule], options: &ScanOptions) -> Vec<RuleScan> {
-    rules.iter().map(|rule| scan_rule(rule, options)).collect()
+    rules.par_iter().map(|rule| scan_rule(rule, options)).collect()
 }
 
 pub fn apply(scans: &[RuleScan]) -> CleanReport {
-    let mut report = CleanReport::default();
-
-    for scan in scans {
-        for path in &scan.files {
-            match fs::symlink_metadata(path) {
-                Ok(meta) => {
-                    let size = meta.len();
-                    if fs::remove_file(path).is_ok() {
-                        report.bytes_freed += size;
-                        report.files_removed += 1;
-                    } else {
+    scans
+        .par_iter()
+        .map(|scan| {
+            let mut report = CleanReport::default();
+            for path in &scan.files {
+                match fs::symlink_metadata(path) {
+                    Ok(meta) => {
+                        let size = meta.len();
+                        if fs::remove_file(path).is_ok() {
+                            report.bytes_freed += size;
+                            report.files_removed += 1;
+                        } else {
+                            report.errors += 1;
+                        }
+                    }
+                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                        continue;
+                    }
+                    Err(_) => {
                         report.errors += 1;
                     }
                 }
-                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                    continue;
-                }
-                Err(_) => {
-                    report.errors += 1;
+            }
+
+            let mut dirs = scan.dirs.clone();
+            dirs.sort_by_key(|path| std::cmp::Reverse(path.components().count()));
+            for dir in dirs {
+                match fs::remove_dir(&dir) {
+                    Ok(_) => report.dirs_removed += 1,
+                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                        continue;
+                    }
+                    Err(_) => {
+                        report.errors += 1;
+                    }
                 }
             }
-        }
-
-        let mut dirs = scan.dirs.clone();
-        dirs.sort_by_key(|path| std::cmp::Reverse(path.components().count()));
-        for dir in dirs {
-            match fs::remove_dir(&dir) {
-                Ok(_) => report.dirs_removed += 1,
-                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                    continue;
-                }
-                Err(_) => {
-                    report.errors += 1;
-                }
-            }
-        }
-    }
-
-    report
+            report
+        })
+        .reduce(CleanReport::default, |mut a, b| {
+            a.files_removed += b.files_removed;
+            a.dirs_removed += b.dirs_removed;
+            a.bytes_freed += b.bytes_freed;
+            a.errors += b.errors;
+            a
+        })
 }
 
 pub fn dry_run_output(scans: &[RuleScan]) -> DryRunOutput {
@@ -651,4 +659,26 @@ fn build_globset(patterns: &[String]) -> (Option<GlobSet>, Vec<String>) {
 fn record_error(scan: &mut RuleScan, message: String) {
     scan.errors += 1;
     scan.error_messages.push(message);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_archive_base_name() {
+        assert_eq!(archive_base_name("test.tar.gz"), Some("test".to_string()));
+        assert_eq!(archive_base_name("project.zip"), Some("project".to_string()));
+        assert_eq!(archive_base_name("no-extension"), None);
+        assert_eq!(archive_base_name(".zip"), None);
+    }
+
+    #[test]
+    fn test_is_log_file_name() {
+        assert!(is_log_file_name(Path::new("app.log")));
+        assert!(is_log_file_name(Path::new("error.log.1")));
+        assert!(is_log_file_name(Path::new("xsession-errors")));
+        assert!(is_log_file_name(Path::new("test.error")));
+        assert!(!is_log_file_name(Path::new("not-a-log.txt")));
+    }
 }
